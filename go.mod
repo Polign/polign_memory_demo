@@ -4,6 +4,7 @@ go 1.25
 
 require (
 	github.com/anthropics/anthropic-sdk-go v1.66.0
+	github.com/openai/openai-go/v2 v2.7.1
 	golang.org/x/text v0.28.0
 )
 

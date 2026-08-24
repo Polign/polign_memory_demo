@@ -13,26 +13,35 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/anthropics/anthropic-sdk-go"
 )
 
 func main() {
 	polignURL := flag.String("polign", "http://127.0.0.1:24100", "polign_db server HTTP address")
 	collection := flag.String("collection", "memories", "collection the memories live in (one per agent identity)")
-	model := flag.String("model", "claude-opus-5", "Claude model id")
+	model := flag.String("model", "claude-opus-5", "model id; a claude-* id uses the Anthropic API, a gpt-*/o* id uses the OpenAI API (see also -provider)")
+	provider := flag.String("provider", "", "force \"anthropic\" or \"openai\" instead of inferring from -model")
 	dataDir := flag.String("data-dir", "", "embedding model directory (default: user cache dir)")
 	dataURL := flag.String("data-url", DefaultDataURL, "embedding model artifact (URL or local tarball)")
 	predicatesPath := flag.String("predicates", "", "predicate registry JSON (default: the embedded registry)")
 	flag.Parse()
 
-	if err := run(*polignURL, *collection, *model, *dataDir, *dataURL, *predicatesPath); err != nil {
+	if err := run(*polignURL, *collection, *model, *provider, *dataDir, *dataURL, *predicatesPath); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
 }
 
-func run(polignURL, collection, model, dataDir, dataURL, predicatesPath string) error {
+// inferProvider picks the API a model id belongs to.
+func inferProvider(model string) string {
+	for _, prefix := range []string{"gpt-", "o1", "o3", "o4"} {
+		if strings.HasPrefix(model, prefix) {
+			return "openai"
+		}
+	}
+	return "anthropic"
+}
+
+func run(polignURL, collection, model, provider, dataDir, dataURL, predicatesPath string) error {
 	logf := func(format string, args ...any) { fmt.Printf(dim+format+reset+"\n", args...) }
 
 	raw := defaultPredicates
@@ -67,13 +76,28 @@ func run(polignURL, collection, model, dataDir, dataURL, predicatesPath string) 
 		return fmt.Errorf("no polign_db server at %s (start one with: polign-server -store fs:./demo-bucket -http 127.0.0.1:24100)", polignURL)
 	}
 
-	if os.Getenv("ANTHROPIC_API_KEY") == "" {
-		logf("ANTHROPIC_API_KEY is not set; using whatever credentials the Anthropic SDK resolves")
-	}
 	store := NewStore(db, collection, registry, embedder.Embed)
-	agent := NewAgent(anthropic.NewClient(), model, store)
 
-	fmt.Printf("polign memory demo: %s against %s (collection %q)\n", model, polignURL, collection)
+	if provider == "" {
+		provider = inferProvider(model)
+	}
+	var agent Agent
+	switch provider {
+	case "anthropic":
+		if os.Getenv("ANTHROPIC_API_KEY") == "" {
+			logf("ANTHROPIC_API_KEY is not set; using whatever credentials the Anthropic SDK resolves (e.g. ant auth login)")
+		}
+		agent = newAnthropicAgent(model, store)
+	case "openai":
+		if os.Getenv("OPENAI_API_KEY") == "" {
+			logf("OPENAI_API_KEY is not set; the OpenAI SDK will fail without it")
+		}
+		agent = newOpenAIAgent(model, store)
+	default:
+		return fmt.Errorf("unknown provider %q (want anthropic or openai)", provider)
+	}
+
+	fmt.Printf("polign memory demo: %s (%s) against %s (collection %q)\n", model, provider, polignURL, collection)
 	fmt.Printf(dim + "tool calls print as they happen. /quit exits, /reset clears the conversation (not the store).\n" + reset)
 
 	sc := bufio.NewScanner(os.Stdin)
@@ -90,7 +114,7 @@ func run(polignURL, collection, model, dataDir, dataURL, predicatesPath string) 
 		case line == "/quit" || line == "/exit":
 			return nil
 		case line == "/reset":
-			agent.messages = nil
+			agent.Reset()
 			fmt.Println(dim + "conversation cleared; the memory store is untouched" + reset)
 			continue
 		}

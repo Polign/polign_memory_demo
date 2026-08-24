@@ -36,13 +36,20 @@ and restarted from the bucket with nothing lost.
 
 ## Run it
 
-You need Go, an Anthropic API key, and `polign-server`
+You need Go, an Anthropic or OpenAI API key, and `polign-server`
 (`curl -fsSL https://get.polign.com | sh`).
 
 ```sh
 export ANTHROPIC_API_KEY=...
 ./run-demo.sh
 ```
+
+Claude models are the default. To use an OpenAI model instead, export
+`OPENAI_API_KEY` and pass the model id, e.g.
+`./run-demo.sh fs:./demo-bucket -model gpt-5`; the provider is inferred from
+the id. Same store, same tools, same typed
+semantics, because the schema enforcement lives in the database layer, not in
+the prompt or the provider.
 
 That starts a server on a local filesystem bucket (`./demo-bucket`) and opens
 the agent. Pass your own bucket to make the durability real:
@@ -134,7 +141,8 @@ POLIGN_MEMORY_DEMO_URL=http://127.0.0.1:24100 go test -run TestIntegrationRecall
 ```
 -polign      polign_db HTTP address        (default http://127.0.0.1:24100)
 -collection  collection for the memories   (default "memories")
--model       Claude model id               (default claude-opus-5)
+-model       model id                      (default claude-opus-5; gpt-*/o* ids use OpenAI)
+-provider    force "anthropic" or "openai" instead of inferring from -model
 -predicates  registry JSON to use instead of the embedded one
 -data-dir    embedding model cache dir     (default: user cache dir)
 ```

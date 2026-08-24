@@ -1,0 +1,82 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	"github.com/anthropics/anthropic-sdk-go"
+)
+
+// anthropicAgent drives Claude models with a hand-written tool loop.
+type anthropicAgent struct {
+	client   anthropic.Client
+	model    string
+	tb       *toolbox
+	system   string
+	tools    []anthropic.ToolUnionParam
+	messages []anthropic.MessageParam
+}
+
+func newAnthropicAgent(model string, store *Store) *anthropicAgent {
+	specs := toolSpecs()
+	defs := make([]anthropic.ToolParam, len(specs))
+	tools := make([]anthropic.ToolUnionParam, len(specs))
+	for i, spec := range specs {
+		defs[i] = anthropic.ToolParam{
+			Name:        spec.Name,
+			Description: anthropic.String(spec.Description),
+			InputSchema: anthropic.ToolInputSchemaParam{Properties: spec.Properties, Required: spec.Required},
+		}
+		tools[i] = anthropic.ToolUnionParam{OfTool: &defs[i]}
+	}
+	return &anthropicAgent{
+		client: anthropic.NewClient(),
+		model:  model,
+		tb:     &toolbox{store: store},
+		system: systemPrompt(store.registry),
+		tools:  tools,
+	}
+}
+
+func (a *anthropicAgent) Reset() { a.messages = nil }
+
+func (a *anthropicAgent) Turn(ctx context.Context, userText string) (string, error) {
+	a.messages = append(a.messages, anthropic.NewUserMessage(anthropic.NewTextBlock(userText)))
+
+	for {
+		resp, err := a.client.Messages.New(ctx, anthropic.MessageNewParams{
+			Model:     anthropic.Model(a.model),
+			MaxTokens: 16000,
+			System:    []anthropic.TextBlockParam{{Text: a.system}},
+			Messages:  a.messages,
+			Tools:     a.tools,
+		})
+		if err != nil {
+			// Drop the failed turn from history so the conversation can continue.
+			a.messages = a.messages[:len(a.messages)-1]
+			return "", err
+		}
+		a.messages = append(a.messages, resp.ToParam())
+
+		var replies []string
+		var results []anthropic.ContentBlockParamUnion
+		for _, block := range resp.Content {
+			switch v := block.AsAny().(type) {
+			case anthropic.TextBlock:
+				replies = append(replies, v.Text)
+			case anthropic.ToolUseBlock:
+				result, isErr := a.tb.run(v.Name, []byte(v.JSON.Input.Raw()))
+				results = append(results, anthropic.NewToolResultBlock(v.ID, result, isErr))
+			}
+		}
+
+		if resp.StopReason == anthropic.StopReasonRefusal {
+			return "", fmt.Errorf("the model declined this request (%s)", resp.StopDetails.Category)
+		}
+		if resp.StopReason != anthropic.StopReasonToolUse {
+			return strings.Join(replies, "\n"), nil
+		}
+		a.messages = append(a.messages, anthropic.NewUserMessage(results...))
+	}
+}
