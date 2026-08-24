@@ -1,4 +1,9 @@
-package main
+// Package memkit is the demo's memory layer as an importable package: a
+// registry of typed predicates, a store that turns writes into database
+// semantics (validation, cardinality-driven supersession, idempotent dedupe),
+// and exact plus semantic recall over one polign_db collection. Bring your
+// own predicates JSON and embedder; see the repo README for the pattern.
+package memkit
 
 import (
 	"crypto/sha256"
@@ -104,15 +109,29 @@ type RememberResult struct {
 // from model judgment), and every record's vector is derived from its own text
 // so semantic recall searches the same records exact recall filters.
 type Store struct {
-	db         *PolignClient
+	db         VectorDB
 	collection string
 	registry   Registry
 	embed      func(string) []float32
 	now        func() time.Time
 }
 
-func NewStore(db *PolignClient, collection string, registry Registry, embed func(string) []float32) *Store {
+// VectorDB is the polign_db surface the store needs; *PolignClient implements
+// it, and so can a fake in tests.
+type VectorDB interface {
+	Put(collection, id string, values []float32, metadata map[string]any) error
+	GetMany(collection string, ids []string) ([]StoredVector, error)
+	List(collection string, filter map[string]any, limit int) ([]StoredVector, int, error)
+	Search(collection string, values []float32, k int, filter map[string]any) ([]Hit, error)
+}
+
+func NewStore(db VectorDB, collection string, registry Registry, embed func(string) []float32) *Store {
 	return &Store{db: db, collection: collection, registry: registry, embed: embed, now: time.Now}
+}
+
+// Registry returns the predicate registry the store enforces.
+func (s *Store) Registry() Registry {
+	return s.registry
 }
 
 var (
@@ -382,7 +401,7 @@ func (s *Store) rewrite(rec Record) error {
 
 // normalizeValue enforces the predicate's declared value type. Deliberately no
 // coercion: a number predicate rejects the string "8000" with an error naming
-// the expected type, and the model corrects the call — the same self-repair
+// the expected type, and the model corrects the call, the same self-repair
 // loop the registry uses for unknown predicates.
 func normalizeValue(predicate string, spec Predicate, v any) (any, error) {
 	vt := spec.ValueType
@@ -476,7 +495,7 @@ func recordFromMetadata(id string, m map[string]any) Record {
 		Kind:         str("kind"),
 		Subject:      str("subject"),
 		Predicate:    str("predicate"),
-		Value:        m["value"], // string, float64, or bool — as stored
+		Value:        m["value"], // string, float64, or bool, as stored
 		Confidence:   conf,
 		Source:       str("source"),
 		Status:       str("status"),

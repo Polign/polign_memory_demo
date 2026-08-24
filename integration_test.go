@@ -4,7 +4,36 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/Polign/polign_memory_demo/memkit"
 )
+
+// stubEmbed maps distinct texts to distinct near-orthogonal unit vectors (a
+// copy of the memkit test helper): the contract under test is store <->
+// server, not the model.
+func stubEmbed(text string) []float32 {
+	v := make([]float32, 8)
+	h := 0
+	for _, r := range text {
+		h = h*31 + int(r)
+	}
+	for i := range v {
+		h = h*1103515245 + 12345
+		v[i] = float32((h>>16)%1000) / 1000
+	}
+	var sq float64
+	for _, x := range v {
+		sq += float64(x * x)
+	}
+	var g = sq
+	for range 20 {
+		g = (g + sq/g) / 2
+	}
+	for i := range v {
+		v[i] /= float32(g)
+	}
+	return v
+}
 
 // Integration tests against a real polign_db server, opt-in via
 // POLIGN_MEMORY_DEMO_URL (e.g. http://127.0.0.1:24100). They use the stub
@@ -15,21 +44,21 @@ import (
 //	POLIGN_MEMORY_DEMO_URL=... go test -run TestIntegrationWrite
 //	(kill the server, restart it from the same -store)
 //	POLIGN_MEMORY_DEMO_URL=... go test -run TestIntegrationRecallAfterRestart
-func itStore(t *testing.T) *Store {
+func itStore(t *testing.T) *memkit.Store {
 	t.Helper()
 	url := os.Getenv("POLIGN_MEMORY_DEMO_URL")
 	if url == "" {
 		t.Skip("set POLIGN_MEMORY_DEMO_URL to run integration tests")
 	}
-	db := NewPolignClient(url)
+	db := memkit.NewPolignClient(url)
 	if !db.Healthy() {
 		t.Fatalf("no polign_db server at %s", url)
 	}
-	registry, err := LoadRegistry(defaultPredicates)
+	registry, err := memkit.LoadRegistry(defaultPredicates)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewStore(db, "it-memories", registry, stubEmbed)
+	return memkit.NewStore(db, "it-memories", registry, stubEmbed)
 }
 
 func TestIntegrationWrite(t *testing.T) {
@@ -72,7 +101,7 @@ func TestIntegrationRecallAfterRestart(t *testing.T) {
 	// The server may still be priming from the bucket right after boot.
 	deadline := time.Now().Add(15 * time.Second)
 	for {
-		records, err := store.Recall(RecallQuery{Subject: "anup", Predicate: "prefers_editor"})
+		records, err := store.Recall(memkit.RecallQuery{Subject: "anup", Predicate: "prefers_editor"})
 		if err == nil && len(records) == 1 {
 			break
 		}
@@ -87,10 +116,10 @@ func TestIntegrationRecallAfterRestart(t *testing.T) {
 // assertMemoryState checks the invariants both phases share: one active
 // editor preference (neovim), a superseded vim linked to it, the multi-valued
 // like intact, and semantic recall returning only active records.
-func assertMemoryState(t *testing.T, store *Store) {
+func assertMemoryState(t *testing.T, store *memkit.Store) {
 	t.Helper()
 
-	active, err := store.Recall(RecallQuery{Subject: "anup", Predicate: "prefers_editor"})
+	active, err := store.Recall(memkit.RecallQuery{Subject: "anup", Predicate: "prefers_editor"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +127,7 @@ func assertMemoryState(t *testing.T, store *Store) {
 		t.Fatalf("active editor preference wrong: %+v", active)
 	}
 
-	history, err := store.Recall(RecallQuery{Subject: "anup", Predicate: "prefers_editor", IncludeHistory: true})
+	history, err := store.Recall(memkit.RecallQuery{Subject: "anup", Predicate: "prefers_editor", IncludeHistory: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +140,7 @@ func assertMemoryState(t *testing.T, store *Store) {
 		}
 	}
 
-	likes, err := store.Recall(RecallQuery{Subject: "anup", Predicate: "likes"})
+	likes, err := store.Recall(memkit.RecallQuery{Subject: "anup", Predicate: "likes"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +150,7 @@ func assertMemoryState(t *testing.T, store *Store) {
 
 	// Typed values survive as their types, and range filters compare
 	// numerically in the database.
-	goals, err := store.Recall(RecallQuery{Subject: "anup", Predicate: "daily_step_goal"})
+	goals, err := store.Recall(memkit.RecallQuery{Subject: "anup", Predicate: "daily_step_goal"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +161,7 @@ func assertMemoryState(t *testing.T, store *Store) {
 		t.Fatalf("number value did not round-trip typed through the server: %#v", goals[0].Value)
 	}
 	lo, hi := 8000.0, 10000.0
-	inRange, err := store.Recall(RecallQuery{Predicate: "daily_step_goal", ValueMin: &lo, ValueMax: &hi})
+	inRange, err := store.Recall(memkit.RecallQuery{Predicate: "daily_step_goal", ValueMin: &lo, ValueMax: &hi})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +169,7 @@ func assertMemoryState(t *testing.T, store *Store) {
 		t.Fatalf("numeric range filter should match the goal, got %+v", inRange)
 	}
 	tooHigh := 9500.0
-	outOfRange, err := store.Recall(RecallQuery{Predicate: "daily_step_goal", ValueMin: &tooHigh})
+	outOfRange, err := store.Recall(memkit.RecallQuery{Predicate: "daily_step_goal", ValueMin: &tooHigh})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +177,7 @@ func assertMemoryState(t *testing.T, store *Store) {
 		t.Fatalf("range filter matched below its bound: %+v", outOfRange)
 	}
 
-	semantic, err := store.Recall(RecallQuery{Query: "anup prefers editor neovim"})
+	semantic, err := store.Recall(memkit.RecallQuery{Query: "anup prefers editor neovim"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+
+	"github.com/Polign/polign_memory_demo/memkit"
 )
 
 const (
@@ -24,7 +26,7 @@ type Agent interface {
 	Reset()
 }
 
-func systemPrompt(registry Registry) string {
+func systemPrompt(registry memkit.Registry) string {
 	return `You are a personal assistant with a typed, durable memory store.
 
 Memory is not text you paste into your context. It is a database of typed
@@ -130,7 +132,7 @@ func toolSpecs() []toolSpec {
 // toolbox runs tool calls against the store and prints the trace both agents
 // share.
 type toolbox struct {
-	store *Store
+	store *memkit.Store
 }
 
 // run executes one tool call, printing it and its result. Errors return as
@@ -192,7 +194,7 @@ func (tb *toolbox) dispatch(name string, input []byte) (string, bool) {
 		if err := json.Unmarshal(input, &in); err != nil {
 			return fail(err)
 		}
-		records, err := tb.store.Recall(RecallQuery{
+		records, err := tb.store.Recall(memkit.RecallQuery{
 			Query: in.Query, Subject: in.Subject, Predicate: in.Predicate,
 			Kind: in.Kind, MinConfidence: in.MinConfidence, IncludeHistory: in.IncludeHistory,
 			ValueMin: in.ValueMin, ValueMax: in.ValueMax,

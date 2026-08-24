@@ -74,11 +74,18 @@ you> I use Vim as my editor.
   → remember_preference({"subject":"user","predicate":"prefers_editor","value":"vim"})
   ← {"stored":{"id":"m-...","value":"vim","status":"active",...}}
 
+you> My daily step goal is 9000.
+  → remember_fact({"subject":"user","predicate":"daily_step_goal","value":9000})
+  ← {"stored":{"id":"m-...","value":9000,"status":"active",...}}
+
 you> What editor do I use?
   → recall({"subject":"user","predicate":"prefers_editor"})
   ← {"count":1,"records":[{"value":"vim","status":"active",...}]}
 claude> Vim.
 ```
+
+Note the step goal: `9000` is stored as a JSON number, because the registry
+declares `daily_step_goal` a number. Typed in, typed out.
 
 No "eventually consistent" caveat: the write was durable in the bucket before
 the tool call returned.
@@ -96,6 +103,18 @@ kill %1                                  # or ctrl-c the whole demo
 
 Ask again. Still Vim. The agent process, the server process, and the server's
 memory are all disposable; the bucket is the database.
+
+The typed value survived too, and it is still a number:
+
+```
+you> Is my step goal above 8000?
+  → recall({"subject":"user","predicate":"daily_step_goal","value_min":8000})
+  ← {"count":1,"records":[{"value":9000,...}]}
+claude> Yes, 9000 steps.
+```
+
+That comparison ran in the database as a numeric range filter, not as string
+matching in the model's context.
 
 **Act 4: the contradiction (the point of the demo).**
 
@@ -115,6 +134,23 @@ The database knew `prefers_editor` is single-valued, so the write became a
 supersession, with the old value kept as linked history. No prompt told the
 model to detect a contradiction; the schema did it.
 
+## Inspect the store
+
+Run with `-inspect 127.0.0.1:24102` (for example
+`./run-demo.sh fs:./demo-bucket -inspect 127.0.0.1:24102`) and open that
+address in a browser. You get one read-only table of every record the agent
+can see, refreshing as you talk; superseded rows are struck through and link
+to the record that replaced them.
+
+## Record the script
+
+`record-demo.sh` replays all four acts hands-free against a fresh bucket,
+including the kill -9 and the cold restart, so the whole thing can be
+captured with `asciinema rec demo.cast -c ./record-demo.sh`. Run
+`./run-demo.sh` once first so the embedding model is already cached. You can
+also replay any single act yourself:
+`./run-demo.sh fs:./demo-bucket -script demo/act1.txt`.
+
 ## Recall is two primitives over one store
 
 - **Exact:** `recall(subject, predicate, kind, min_confidence, value_min,
@@ -126,6 +162,27 @@ model to detect a contradiction; the schema did it.
 
 Semantic retrieval and durable typed state are different primitives. Here
 they run over one store, in one bucket, with one consistency contract.
+
+## Use the pattern in your own agent
+
+The memory layer is an importable package,
+[memkit](memkit/): the typed client, the predicate registry, and the store
+with its supersession semantics. Bring your own predicates JSON and your own
+embedder:
+
+```go
+import "github.com/Polign/polign_memory_demo/memkit"
+
+registry, _ := memkit.LoadRegistry(myPredicatesJSON)
+db := memkit.NewPolignClient("http://127.0.0.1:24100")
+store := memkit.NewStore(db, "memories", registry, myEmbedder)
+
+store.Remember("preference", "user", "prefers_editor", "neovim", 1, "user_stated")
+records, _ := store.Recall(memkit.RecallQuery{Subject: "user", Predicate: "prefers_editor"})
+```
+
+Writes are validated against the registry, supersession follows from
+cardinality, and recall is the same two primitives the demo uses.
 
 ## Tests
 
@@ -152,4 +209,6 @@ POLIGN_MEMORY_DEMO_URL=http://127.0.0.1:24100 go test -run TestIntegrationRecall
 -provider    force "anthropic" or "openai" instead of inferring from -model
 -predicates  registry JSON to use instead of the embedded one
 -data-dir    embedding model cache dir     (default: user cache dir)
+-script      replay user lines from a file instead of reading stdin, then exit
+-inspect     serve the read-only inspector at this address (e.g. 127.0.0.1:24102)
 ```

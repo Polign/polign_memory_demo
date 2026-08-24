@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
+
+	"github.com/Polign/polign_memory_demo/memkit"
 )
 
 // anthropicAgent drives Claude models with a hand-written tool loop.
@@ -18,7 +20,7 @@ type anthropicAgent struct {
 	messages []anthropic.MessageParam
 }
 
-func newAnthropicAgent(model string, store *Store) *anthropicAgent {
+func newAnthropicAgent(model string, store *memkit.Store) *anthropicAgent {
 	specs := toolSpecs()
 	defs := make([]anthropic.ToolParam, len(specs))
 	tools := make([]anthropic.ToolUnionParam, len(specs))
@@ -34,7 +36,7 @@ func newAnthropicAgent(model string, store *Store) *anthropicAgent {
 		client: anthropic.NewClient(),
 		model:  model,
 		tb:     &toolbox{store: store},
-		system: systemPrompt(store.registry),
+		system: systemPrompt(store.Registry()),
 		tools:  tools,
 	}
 }

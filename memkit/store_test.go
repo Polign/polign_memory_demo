@@ -1,4 +1,4 @@
-package main
+package memkit
 
 import (
 	"encoding/json"
@@ -202,13 +202,24 @@ func sqrt32(x float32) float32 {
 	return g
 }
 
+// testPredicates is a small registry covering every shape the tests need:
+// single- and multi-valued predicates, and each value type.
+const testPredicates = `{
+	"prefers_editor":  {"cardinality": "single", "value_type": "string",  "description": "preferred editor"},
+	"works_at":        {"cardinality": "single", "value_type": "string",  "description": "current employer"},
+	"lives_in":        {"cardinality": "single", "value_type": "string",  "description": "current city"},
+	"daily_step_goal": {"cardinality": "single", "value_type": "number",  "description": "daily step goal"},
+	"uses_dark_mode":  {"cardinality": "single", "value_type": "boolean", "description": "dark mode on"},
+	"likes":           {"cardinality": "multi",  "value_type": "string",  "description": "something liked"}
+}`
+
 func newTestStore(t *testing.T) (*Store, *fakePolign) {
 	t.Helper()
 	fake := newFakePolign()
 	srv := httptest.NewServer(fake.handler())
 	t.Cleanup(srv.Close)
 
-	registry, err := LoadRegistry(defaultPredicates)
+	registry, err := LoadRegistry([]byte(testPredicates))
 	if err != nil {
 		t.Fatal(err)
 	}

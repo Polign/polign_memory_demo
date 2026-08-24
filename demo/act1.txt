@@ -1,0 +1,4 @@
+# Act 1: read-your-writes. Fresh bucket, fresh agent.
+I use Vim as my editor.
+My daily step goal is 9000.
+What editor do I use?

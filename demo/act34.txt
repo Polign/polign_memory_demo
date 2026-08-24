@@ -1,0 +1,6 @@
+# Act 3: the server was kill -9'd and cold-started from nothing but the
+# bucket. Act 4: a contradiction becomes a schema-driven supersession.
+Is my step goal above 8000?
+What editor do I use?
+I switched to Neovim.
+What editors have I used over time?

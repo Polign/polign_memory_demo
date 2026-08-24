@@ -6,6 +6,8 @@ import (
 
 	"github.com/openai/openai-go/v2"
 	"github.com/openai/openai-go/v2/shared"
+
+	"github.com/Polign/polign_memory_demo/memkit"
 )
 
 // openaiAgent drives OpenAI models through the Chat Completions tool loop.
@@ -19,7 +21,7 @@ type openaiAgent struct {
 	messages []openai.ChatCompletionMessageParamUnion
 }
 
-func newOpenAIAgent(model string, store *Store) *openaiAgent {
+func newOpenAIAgent(model string, store *memkit.Store) *openaiAgent {
 	specs := toolSpecs()
 	tools := make([]openai.ChatCompletionToolUnionParam, len(specs))
 	for i, spec := range specs {
@@ -37,7 +39,7 @@ func newOpenAIAgent(model string, store *Store) *openaiAgent {
 		client: openai.NewClient(),
 		model:  model,
 		tb:     &toolbox{store: store},
-		system: systemPrompt(store.registry),
+		system: systemPrompt(store.Registry()),
 		tools:  tools,
 	}
 }

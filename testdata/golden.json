@@ -1,0 +1,170 @@
+[
+  {
+    "text": "user prefers editor neovim",
+    "tokens": [
+      "user",
+      "prefers",
+      "editor",
+      "neo",
+      "##vi",
+      "##m"
+    ]
+  },
+  {
+    "text": "user daily step goal 9000",
+    "tokens": [
+      "user",
+      "daily",
+      "step",
+      "goal",
+      "900",
+      "##0"
+    ]
+  },
+  {
+    "text": "I use Vim as my editor.",
+    "tokens": [
+      "i",
+      "use",
+      "vi",
+      "##m",
+      "as",
+      "my",
+      "editor",
+      "."
+    ]
+  },
+  {
+    "text": "Café au lait",
+    "tokens": [
+      "cafe",
+      "au",
+      "lai",
+      "##t"
+    ]
+  },
+  {
+    "text": "naïve résumé",
+    "tokens": [
+      "naive",
+      "resume"
+    ]
+  },
+  {
+    "text": "he said: \"hello, world!\"",
+    "tokens": [
+      "he",
+      "said",
+      ":",
+      "\"",
+      "hello",
+      ",",
+      "world",
+      "!",
+      "\""
+    ]
+  },
+  {
+    "text": "漢字 and kana",
+    "tokens": [
+      "漢",
+      "[UNK]",
+      "and",
+      "kan",
+      "##a"
+    ]
+  },
+  {
+    "text": "supercalifragilisticexpialidocious antidisestablishmentarianism",
+    "tokens": [
+      "super",
+      "##cal",
+      "##if",
+      "##rag",
+      "##ilis",
+      "##tic",
+      "##ex",
+      "##pia",
+      "##lid",
+      "##oc",
+      "##ious",
+      "anti",
+      "##dis",
+      "##est",
+      "##ab",
+      "##lish",
+      "##ment",
+      "##arian",
+      "##ism"
+    ]
+  },
+  {
+    "text": "polign_db is a vector database",
+    "tokens": [
+      "pol",
+      "##ign",
+      "_",
+      "db",
+      "is",
+      "a",
+      "vector",
+      "database"
+    ]
+  },
+  {
+    "text": "MIXED Case text",
+    "tokens": [
+      "mixed",
+      "case",
+      "text"
+    ]
+  },
+  {
+    "text": "$5.99 or 8,000 steps",
+    "tokens": [
+      "$",
+      "5",
+      ".",
+      "99",
+      "or",
+      "8",
+      ",",
+      "000",
+      "steps"
+    ]
+  },
+  {
+    "text": "emoji 🙂 in text",
+    "tokens": [
+      "em",
+      "##oj",
+      "##i",
+      "[UNK]",
+      "in",
+      "text"
+    ]
+  },
+  {
+    "text": "tabs\tand\nnewlines",
+    "tokens": [
+      "tab",
+      "##s",
+      "and",
+      "new",
+      "##lines"
+    ]
+  },
+  {
+    "text": "it's read-your-writes",
+    "tokens": [
+      "it",
+      "'",
+      "s",
+      "read",
+      "-",
+      "your",
+      "-",
+      "writes"
+    ]
+  }
+]

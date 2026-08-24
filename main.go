@@ -13,6 +13,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/Polign/polign_memory_demo/memkit"
 )
 
 func main() {
@@ -23,9 +25,11 @@ func main() {
 	dataDir := flag.String("data-dir", "", "embedding model directory (default: user cache dir)")
 	dataURL := flag.String("data-url", DefaultDataURL, "embedding model artifact (URL or local tarball)")
 	predicatesPath := flag.String("predicates", "", "predicate registry JSON (default: the embedded registry)")
+	scriptPath := flag.String("script", "", "replay user lines from this file instead of reading stdin, then exit")
+	inspectAddr := flag.String("inspect", "", "serve a read-only inspector page at this address (e.g. 127.0.0.1:24102)")
 	flag.Parse()
 
-	if err := run(*polignURL, *collection, *model, *provider, *dataDir, *dataURL, *predicatesPath); err != nil {
+	if err := run(*polignURL, *collection, *model, *provider, *dataDir, *dataURL, *predicatesPath, *scriptPath, *inspectAddr); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
@@ -41,7 +45,7 @@ func inferProvider(model string) string {
 	return "anthropic"
 }
 
-func run(polignURL, collection, model, provider, dataDir, dataURL, predicatesPath string) error {
+func run(polignURL, collection, model, provider, dataDir, dataURL, predicatesPath, scriptPath, inspectAddr string) error {
 	logf := func(format string, args ...any) { fmt.Printf(dim+format+reset+"\n", args...) }
 
 	raw := defaultPredicates
@@ -51,7 +55,7 @@ func run(polignURL, collection, model, provider, dataDir, dataURL, predicatesPat
 			return err
 		}
 	}
-	registry, err := LoadRegistry(raw)
+	registry, err := memkit.LoadRegistry(raw)
 	if err != nil {
 		return err
 	}
@@ -71,12 +75,19 @@ func run(polignURL, collection, model, provider, dataDir, dataURL, predicatesPat
 		return err
 	}
 
-	db := NewPolignClient(polignURL)
+	db := memkit.NewPolignClient(polignURL)
 	if !db.Healthy() {
 		return fmt.Errorf("no polign_db server at %s (start one with: polign-server -store fs:./demo-bucket -http 127.0.0.1:24100)", polignURL)
 	}
 
-	store := NewStore(db, collection, registry, embedder.Embed)
+	store := memkit.NewStore(db, collection, registry, embedder.Embed)
+
+	if inspectAddr != "" {
+		if err := startInspector(inspectAddr, store, collection); err != nil {
+			return err
+		}
+		logf("inspector: http://%s", inspectAddr)
+	}
 
 	if provider == "" {
 		provider = inferProvider(model)
@@ -100,14 +111,36 @@ func run(polignURL, collection, model, provider, dataDir, dataURL, predicatesPat
 	fmt.Printf("polign memory demo: %s (%s) against %s (collection %q)\n", model, provider, polignURL, collection)
 	fmt.Printf(dim + "tool calls print as they happen. /quit exits, /reset clears the conversation (not the store).\n" + reset)
 
-	sc := bufio.NewScanner(os.Stdin)
-	for {
-		fmt.Print("\nyou> ")
-		if !sc.Scan() {
-			fmt.Println()
-			return sc.Err()
+	label := "claude"
+	if provider == "openai" {
+		label = "gpt"
+	}
+
+	var scanErr error
+	next := stdinSource(&scanErr)
+	if scriptPath != "" {
+		lines, err := loadScript(scriptPath)
+		if err != nil {
+			return err
 		}
-		line := strings.TrimSpace(sc.Text())
+		next = scriptSource(lines, typeDelay, turnPause)
+	}
+	if err := repl(agent, label, next); err != nil {
+		return err
+	}
+	return scanErr
+}
+
+// repl drives the conversation until next reports no more lines or the user
+// quits. next prints the "you> " prompt and yields one user line, already
+// echoed to the terminal.
+func repl(agent Agent, label string, next func() (string, bool)) error {
+	for {
+		line, ok := next()
+		if !ok {
+			return nil
+		}
+		line = strings.TrimSpace(line)
 		switch {
 		case line == "":
 			continue
@@ -123,6 +156,21 @@ func run(polignURL, collection, model, provider, dataDir, dataURL, predicatesPat
 			fmt.Fprintln(os.Stderr, "error:", err)
 			continue
 		}
-		fmt.Printf("\nclaude> %s\n", reply)
+		fmt.Printf("\n%s> %s\n", label, reply)
+	}
+}
+
+// stdinSource reads user lines interactively. A scanner error lands in
+// scanErr so run can surface it after the loop ends.
+func stdinSource(scanErr *error) func() (string, bool) {
+	sc := bufio.NewScanner(os.Stdin)
+	return func() (string, bool) {
+		fmt.Print("\nyou> ")
+		if !sc.Scan() {
+			fmt.Println()
+			*scanErr = sc.Err()
+			return "", false
+		}
+		return sc.Text(), true
 	}
 }
