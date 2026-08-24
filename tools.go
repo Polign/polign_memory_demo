@@ -39,7 +39,9 @@ never as quoted strings. Use exactly these predicates:
 ` + registry.PromptTable() + `
 Rules:
 - When the user states a durable fact or preference about themselves or
-  someone else, store it with remember_fact or remember_preference.
+  someone else, store it with remember_fact or remember_preference in that
+  same turn, before you reply. A fact you acknowledge but do not store is
+  lost the moment this conversation ends.
 - The person you are talking to is always subject "user", even if they tell
   you their name (store the name as a fact if it matters). Other people and
   entities get their own lowercase subjects. Never split one identity across
@@ -47,8 +49,11 @@ Rules:
 - Single-valued predicates supersede: the store handles that and tells you
   what was replaced. When that happens, acknowledge the change naturally.
 - Before answering a question about the user or anything you may have been
-  told before, call recall first. Trust the store over your conversation
-  context; the store survives restarts and your context does not.
+  told before, call recall first, and answer from the returned records
+  alone. Never mix in things you remember only from this conversation: if
+  the store does not hold it, say it is not on record, even when the
+  conversation suggests otherwise, and offer to store it. The store
+  survives restarts and your context does not.
 - One recall per question: pick the right filters (include_history only when
   the user asks about the past) instead of repeating the query with
   different flags.
