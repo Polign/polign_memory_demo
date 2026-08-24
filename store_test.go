@@ -33,6 +33,19 @@ func (f *fakePolign) matches(meta map[string]any, filter map[string]any) bool {
 			return false
 		}
 		if op, isOp := want.(map[string]any); isOp {
+			if in, hasIn := op["$in"].([]any); hasIn {
+				found := false
+				for _, candidate := range in {
+					if candidate == got {
+						found = true
+						break
+					}
+				}
+				if !found {
+					return false
+				}
+				continue
+			}
 			gte, hasGte := op["$gte"].(float64)
 			num, isNum := got.(float64)
 			if !hasGte || !isNum || num < gte {
@@ -368,7 +381,7 @@ func TestSemanticRecallFiltersSuperseded(t *testing.T) {
 	}
 }
 
-func TestForget(t *testing.T) {
+func TestForgetTombstones(t *testing.T) {
 	store, fake := newTestStore(t)
 
 	if _, err := store.Remember("preference", "anup", "prefers_editor", "vim", 0, ""); err != nil {
@@ -377,15 +390,84 @@ func TestForget(t *testing.T) {
 	if _, err := store.Remember("preference", "anup", "prefers_editor", "neovim", 0, ""); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := store.Remember("preference", "anup", "likes", "coffee", 0, ""); err != nil {
+		t.Fatal(err)
+	}
 	n, err := store.Forget("anup", "prefers_editor", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if n != 2 {
-		t.Fatalf("forget should delete the history too, deleted %d", n)
+		t.Fatalf("forget should cover the history too, forgot %d", n)
 	}
-	if len(fake.recs) != 0 {
-		t.Fatalf("store should be empty, has %d", len(fake.recs))
+	// A tombstone is a write, not a delete: the records stay in the store.
+	if len(fake.recs) != 3 {
+		t.Fatalf("tombstoned records should still exist, store has %d", len(fake.recs))
+	}
+
+	// But no recall mode surfaces them, semantic included.
+	for _, q := range []RecallQuery{
+		{Subject: "anup", Predicate: "prefers_editor"},
+		{Subject: "anup", Predicate: "prefers_editor", IncludeHistory: true},
+		{Query: "anup prefers editor neovim", Subject: "anup", Predicate: "prefers_editor"},
+	} {
+		records, err := store.Recall(q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(records) != 0 {
+			t.Fatalf("recall %+v surfaced forgotten records: %+v", q, records)
+		}
+	}
+
+	// Forgetting again is a no-op, not a double count.
+	n, err = store.Forget("anup", "prefers_editor", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("second forget should be a no-op, forgot %d", n)
+	}
+
+	// Re-remembering the same statement revives it.
+	res, err := store.Remember("preference", "anup", "prefers_editor", "vim", 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Existing {
+		t.Fatalf("reviving a forgotten record should be a fresh write, got %+v", res)
+	}
+	active, err := store.Recall(RecallQuery{Subject: "anup", Predicate: "prefers_editor"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(active) != 1 || active[0].Value != "vim" {
+		t.Fatalf("revived record missing: %+v", active)
+	}
+}
+
+func TestForgetSingleValue(t *testing.T) {
+	store, _ := newTestStore(t)
+
+	if _, err := store.Remember("preference", "anup", "likes", "coffee", 0, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Remember("preference", "anup", "likes", "tea", 0, ""); err != nil {
+		t.Fatal(err)
+	}
+	n, err := store.Forget("anup", "likes", "coffee")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("value-scoped forget should hit one record, forgot %d", n)
+	}
+	records, err := store.Recall(RecallQuery{Subject: "anup", Predicate: "likes"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].Value != "tea" {
+		t.Fatalf("only tea should remain, got %+v", records)
 	}
 }
 

@@ -37,13 +37,19 @@ Predicates are a closed registry. Use exactly these:
 ` + registry.PromptTable() + `
 Rules:
 - When the user states a durable fact or preference about themselves or
-  someone else, store it with remember_fact or remember_preference. Subjects
-  are lowercase (a first name, or an entity name).
+  someone else, store it with remember_fact or remember_preference.
+- The person you are talking to is always subject "user", even if they tell
+  you their name (store the name as a fact if it matters). Other people and
+  entities get their own lowercase subjects. Never split one identity across
+  two subjects.
 - Single-valued predicates supersede: the store handles that and tells you
   what was replaced. When that happens, acknowledge the change naturally.
 - Before answering a question about the user or anything you may have been
   told before, call recall first. Trust the store over your conversation
   context; the store survives restarts and your context does not.
+- One recall per question: pick the right filters (include_history only when
+  the user asks about the past) instead of repeating the query with
+  different flags.
 - Use forget only when the user explicitly asks you to forget something.
 - Do not store trivia from the conversation flow, only durable statements.
 - Keep replies short and conversational.`
@@ -61,7 +67,7 @@ type toolSpec struct {
 
 func toolSpecs() []toolSpec {
 	rememberProps := map[string]any{
-		"subject":   map[string]any{"type": "string", "description": "Who or what this is about, lowercase (e.g. \"anup\")"},
+		"subject":   map[string]any{"type": "string", "description": "Who or what this is about, lowercase. Always \"user\" for the person you are talking to."},
 		"predicate": map[string]any{"type": "string", "description": "A registered snake_case predicate (e.g. \"prefers_editor\")"},
 		"value":     map[string]any{"type": "string", "description": "The value (e.g. \"neovim\")"},
 		"confidence": map[string]any{
@@ -101,7 +107,7 @@ func toolSpecs() []toolSpec {
 		},
 		{
 			Name:        "forget",
-			Description: "Permanently delete records for a subject and predicate. With value set, only that record; without it, every record including history.",
+			Description: "Remove records for a subject and predicate from every future recall. With value set, only that record; without it, every record including history.",
 			Properties: map[string]any{
 				"subject":   map[string]any{"type": "string"},
 				"predicate": map[string]any{"type": "string"},

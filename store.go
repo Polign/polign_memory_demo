@@ -201,9 +201,11 @@ type RecallQuery struct {
 }
 
 func (s *Store) Recall(q RecallQuery) ([]Record, error) {
-	filter := map[string]any{}
-	if !q.IncludeHistory {
-		filter["status"] = "active"
+	// Forgotten records never come back; include_history only adds the
+	// superseded ones.
+	filter := map[string]any{"status": "active"}
+	if q.IncludeHistory {
+		filter["status"] = map[string]any{"$in": []string{"active", "superseded"}}
 	}
 	if q.Subject != "" {
 		filter["subject"] = strings.ToLower(strings.TrimSpace(q.Subject))
@@ -245,9 +247,14 @@ func (s *Store) Recall(q RecallQuery) ([]Record, error) {
 	return out, nil
 }
 
-// Forget deletes matching records outright. With value set only that exact
-// record goes; without it every record for (subject, predicate) goes,
-// superseded history included.
+// Forget tombstones matching records: their status flips to "deleted", which
+// every recall mode excludes. With value set only that exact record goes;
+// without it every record for (subject, predicate) goes, superseded history
+// included. A tombstone is a write, not a delete, on purpose: writes are
+// read-your-writes through the server's tail overlay, while a hard delete of
+// a record already persisted to a bucket segment can ack and still be served
+// from the segment until compaction. Re-remembering the same statement
+// revives the record (same content-derived id, upserted back to active).
 func (s *Store) Forget(subject, predicate, value string) (int, error) {
 	subject = strings.ToLower(strings.TrimSpace(subject))
 	predicate = strings.TrimSpace(predicate)
@@ -262,17 +269,19 @@ func (s *Store) Forget(subject, predicate, value string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	deleted := 0
+	forgotten := 0
 	for _, v := range vectors {
-		ok, err := s.db.Delete(s.collection, v.ID)
-		if err != nil {
-			return deleted, err
+		rec := recordFromMetadata(v.ID, v.Metadata)
+		if rec.Status == "deleted" {
+			continue
 		}
-		if ok {
-			deleted++
+		rec.Status = "deleted"
+		if err := s.rewrite(rec); err != nil {
+			return forgotten, err
 		}
+		forgotten++
 	}
-	return deleted, nil
+	return forgotten, nil
 }
 
 // activeRecords lists the active records for (subject, predicate).

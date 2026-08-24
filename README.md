@@ -8,7 +8,7 @@ Every memory is a typed record:
 
 ```
 kind:        preference
-subject:     anup
+subject:     user
 predicate:   prefers_editor
 value:       neovim
 confidence:  1.0
@@ -65,11 +65,11 @@ the whole path: model, typed tool, validation, database.
 
 ```
 you> I use Vim as my editor.
-  → remember_preference({"subject":"anup","predicate":"prefers_editor","value":"vim"})
+  → remember_preference({"subject":"user","predicate":"prefers_editor","value":"vim"})
   ← {"stored":{"id":"m-...","value":"vim","status":"active",...}}
 
 you> What editor do I use?
-  → recall({"subject":"anup","predicate":"prefers_editor"})
+  → recall({"subject":"user","predicate":"prefers_editor"})
   ← {"count":1,"records":[{"value":"vim","status":"active",...}]}
 claude> Vim.
 ```
@@ -95,13 +95,13 @@ memory are all disposable; the bucket is the database.
 
 ```
 you> I switched to Neovim.
-  → remember_preference({"subject":"anup","predicate":"prefers_editor","value":"neovim"})
+  → remember_preference({"subject":"user","predicate":"prefers_editor","value":"neovim"})
   ← {"stored":{"value":"neovim","status":"active",...},
      "superseded":[{"value":"vim","status":"superseded","superseded_by":"m-...",...}]}
 claude> Noted, you've switched from Vim to Neovim.
 
 you> What editors have I used over time?
-  → recall({"subject":"anup","predicate":"prefers_editor","include_history":true})
+  → recall({"subject":"user","predicate":"prefers_editor","include_history":true})
   ← {"count":2,"records":[...vim superseded..., ...neovim active...]}
 ```
 
