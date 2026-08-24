@@ -1,12 +1,14 @@
 {
-  "prefers_editor": {"cardinality": "single", "description": "The code editor this person prefers"},
-  "timezone": {"cardinality": "single", "description": "The timezone this person is in, e.g. America/Los_Angeles"},
-  "works_at": {"cardinality": "single", "description": "The company or organization this person currently works at"},
-  "lives_in": {"cardinality": "single", "description": "The city or place this person currently lives in"},
-  "favorite_color": {"cardinality": "single", "description": "This person's favorite color"},
-  "primary_language": {"cardinality": "single", "description": "The programming language this person mainly works in"},
-  "likes": {"cardinality": "multi", "description": "Something this person likes"},
-  "dislikes": {"cardinality": "multi", "description": "Something this person dislikes"},
-  "owns": {"cardinality": "multi", "description": "Something this person owns"},
-  "working_on": {"cardinality": "multi", "description": "A project this person is working on"}
+  "prefers_editor": {"cardinality": "single", "value_type": "string", "description": "The code editor this person prefers"},
+  "timezone": {"cardinality": "single", "value_type": "string", "description": "The timezone this person is in, e.g. America/Los_Angeles"},
+  "works_at": {"cardinality": "single", "value_type": "string", "description": "The company or organization this person currently works at"},
+  "lives_in": {"cardinality": "single", "value_type": "string", "description": "The city or place this person currently lives in"},
+  "favorite_color": {"cardinality": "single", "value_type": "string", "description": "This person's favorite color"},
+  "primary_language": {"cardinality": "single", "value_type": "string", "description": "The programming language this person mainly works in"},
+  "daily_step_goal": {"cardinality": "single", "value_type": "number", "description": "This person's daily step goal, as a number of steps"},
+  "uses_dark_mode": {"cardinality": "single", "value_type": "boolean", "description": "Whether this person uses dark mode"},
+  "likes": {"cardinality": "multi", "value_type": "string", "description": "Something this person likes"},
+  "dislikes": {"cardinality": "multi", "value_type": "string", "description": "Something this person dislikes"},
+  "owns": {"cardinality": "multi", "value_type": "string", "description": "Something this person owns"},
+  "working_on": {"cardinality": "multi", "value_type": "string", "description": "A project this person is working on"}
 }

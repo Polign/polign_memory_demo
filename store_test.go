@@ -46,9 +46,14 @@ func (f *fakePolign) matches(meta map[string]any, filter map[string]any) bool {
 				}
 				continue
 			}
-			gte, hasGte := op["$gte"].(float64)
 			num, isNum := got.(float64)
-			if !hasGte || !isNum || num < gte {
+			if !isNum {
+				return false
+			}
+			if gte, ok := op["$gte"].(float64); ok && num < gte {
+				return false
+			}
+			if lte, ok := op["$lte"].(float64); ok && num > lte {
 				return false
 			}
 			continue
@@ -495,6 +500,120 @@ func TestRegistryRejectsBadEntries(t *testing.T) {
 	}
 	if _, err := LoadRegistry([]byte(`{"ok_name": {"cardinality": "sometimes"}}`)); err == nil {
 		t.Error("unknown cardinality should be rejected")
+	}
+	if _, err := LoadRegistry([]byte(`{"ok_name": {"cardinality": "single", "value_type": "date"}}`)); err == nil {
+		t.Error("unknown value_type should be rejected")
+	}
+}
+
+func TestValueTypesEnforced(t *testing.T) {
+	store, _ := newTestStore(t)
+
+	// A number predicate rejects a quoted number; the error names the
+	// expected type so the model can self-repair.
+	_, err := store.Remember("fact", "anup", "daily_step_goal", "8000", 0, "")
+	if err == nil || !strings.Contains(err.Error(), "expects a number") {
+		t.Fatalf("string into number predicate should be rejected with the expected type, got: %v", err)
+	}
+	if _, err := store.Remember("fact", "anup", "daily_step_goal", 8000.0, 0, ""); err != nil {
+		t.Fatalf("number value rejected: %v", err)
+	}
+
+	// A boolean predicate rejects strings and accepts booleans.
+	if _, err := store.Remember("preference", "anup", "uses_dark_mode", "yes", 0, ""); err == nil {
+		t.Fatal("string into boolean predicate should be rejected")
+	}
+	if _, err := store.Remember("preference", "anup", "uses_dark_mode", true, 0, ""); err != nil {
+		t.Fatalf("boolean value rejected: %v", err)
+	}
+
+	// A string predicate rejects a number.
+	if _, err := store.Remember("preference", "anup", "prefers_editor", 7.0, 0, ""); err == nil {
+		t.Fatal("number into string predicate should be rejected")
+	}
+
+	// Typed values round-trip as their types.
+	records, err := store.Recall(RecallQuery{Subject: "anup", Predicate: "daily_step_goal"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected one step goal, got %+v", records)
+	}
+	if v, ok := records[0].Value.(float64); !ok || v != 8000 {
+		t.Fatalf("number value did not round-trip typed: %#v", records[0].Value)
+	}
+}
+
+func TestNumberValuesSupersedeAndDedupe(t *testing.T) {
+	store, fake := newTestStore(t)
+
+	if _, err := store.Remember("fact", "anup", "daily_step_goal", 8000.0, 0, ""); err != nil {
+		t.Fatal(err)
+	}
+	dup, err := store.Remember("fact", "anup", "daily_step_goal", 8000.0, 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !dup.Existing {
+		t.Fatalf("same number twice should be idempotent, got %+v", dup)
+	}
+	res, err := store.Remember("fact", "anup", "daily_step_goal", 10000.0, 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Superseded) != 1 || res.Superseded[0].Value.(float64) != 8000 {
+		t.Fatalf("new number should supersede the old one, got %+v", res)
+	}
+	if len(fake.recs) != 2 {
+		t.Fatalf("store should hold active + superseded, has %d", len(fake.recs))
+	}
+}
+
+func TestValueRangeRecall(t *testing.T) {
+	store, _ := newTestStore(t)
+
+	if _, err := store.Remember("fact", "anup", "daily_step_goal", 9000.0, 0, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Remember("fact", "mira", "daily_step_goal", 4000.0, 0, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	lo := 8000.0
+	records, err := store.Recall(RecallQuery{Predicate: "daily_step_goal", ValueMin: &lo})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].Subject != "anup" {
+		t.Fatalf("value_min filter should keep only anup, got %+v", records)
+	}
+
+	hi := 5000.0
+	records, err = store.Recall(RecallQuery{Predicate: "daily_step_goal", ValueMax: &hi})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].Subject != "mira" {
+		t.Fatalf("value_max filter should keep only mira, got %+v", records)
+	}
+}
+
+func TestForgetParsesTypedValues(t *testing.T) {
+	store, _ := newTestStore(t)
+
+	if _, err := store.Remember("fact", "anup", "daily_step_goal", 9000.0, 0, ""); err != nil {
+		t.Fatal(err)
+	}
+	n, err := store.Forget("anup", "daily_step_goal", "9000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("typed forget-by-value should match the number record, forgot %d", n)
+	}
+	if _, err := store.Forget("anup", "daily_step_goal", "not a number"); err == nil {
+		t.Fatal("unparseable value for a number predicate should be rejected")
 	}
 }
 

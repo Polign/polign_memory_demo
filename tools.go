@@ -32,7 +32,9 @@ records, each one: kind (fact or preference), subject, predicate, value,
 confidence, source, status. The store enforces the schema; if a write is
 rejected, read the error and correct the call.
 
-Predicates are a closed registry. Use exactly these:
+Predicates are a closed registry, and each declares its value type. Pass
+values in that type: numbers as JSON numbers, booleans as JSON booleans,
+never as quoted strings. Use exactly these predicates:
 
 ` + registry.PromptTable() + `
 Rules:
@@ -69,7 +71,7 @@ func toolSpecs() []toolSpec {
 	rememberProps := map[string]any{
 		"subject":   map[string]any{"type": "string", "description": "Who or what this is about, lowercase. Always \"user\" for the person you are talking to."},
 		"predicate": map[string]any{"type": "string", "description": "A registered snake_case predicate (e.g. \"prefers_editor\")"},
-		"value":     map[string]any{"type": "string", "description": "The value (e.g. \"neovim\")"},
+		"value":     map[string]any{"type": []string{"string", "number", "boolean"}, "description": "The value, in the predicate's declared type: pass numbers as JSON numbers and booleans as JSON booleans, never as strings"},
 		"confidence": map[string]any{
 			"type": "number", "description": "How certain this is, 0 to 1. Default 1.",
 		},
@@ -102,6 +104,8 @@ func toolSpecs() []toolSpec {
 				"predicate":       map[string]any{"type": "string"},
 				"kind":            map[string]any{"type": "string", "enum": []string{"fact", "preference"}},
 				"min_confidence":  map[string]any{"type": "number"},
+				"value_min":       map[string]any{"type": "number", "description": "Lower bound on a number-typed value (compared numerically)"},
+				"value_max":       map[string]any{"type": "number", "description": "Upper bound on a number-typed value (compared numerically)"},
 				"include_history": map[string]any{"type": "boolean", "description": "Also return superseded records, with what replaced them"},
 			},
 		},
@@ -152,7 +156,7 @@ func (tb *toolbox) dispatch(name string, input []byte) (string, bool) {
 		var in struct {
 			Subject    string  `json:"subject"`
 			Predicate  string  `json:"predicate"`
-			Value      string  `json:"value"`
+			Value      any     `json:"value"`
 			Confidence float64 `json:"confidence"`
 			Source     string  `json:"source"`
 		}
@@ -171,12 +175,14 @@ func (tb *toolbox) dispatch(name string, input []byte) (string, bool) {
 
 	case "recall":
 		var in struct {
-			Query          string  `json:"query"`
-			Subject        string  `json:"subject"`
-			Predicate      string  `json:"predicate"`
-			Kind           string  `json:"kind"`
-			MinConfidence  float64 `json:"min_confidence"`
-			IncludeHistory bool    `json:"include_history"`
+			Query          string   `json:"query"`
+			Subject        string   `json:"subject"`
+			Predicate      string   `json:"predicate"`
+			Kind           string   `json:"kind"`
+			MinConfidence  float64  `json:"min_confidence"`
+			ValueMin       *float64 `json:"value_min"`
+			ValueMax       *float64 `json:"value_max"`
+			IncludeHistory bool     `json:"include_history"`
 		}
 		if err := json.Unmarshal(input, &in); err != nil {
 			return fail(err)
@@ -184,6 +190,7 @@ func (tb *toolbox) dispatch(name string, input []byte) (string, bool) {
 		records, err := tb.store.Recall(RecallQuery{
 			Query: in.Query, Subject: in.Subject, Predicate: in.Predicate,
 			Kind: in.Kind, MinConfidence: in.MinConfidence, IncludeHistory: in.IncludeHistory,
+			ValueMin: in.ValueMin, ValueMax: in.ValueMax,
 		})
 		if err != nil {
 			return fail(err)

@@ -17,17 +17,23 @@ status:      active
 ```
 
 The store enforces the schema. Predicates come from a closed registry
-([predicates.json](predicates.json)) that declares each one single-valued or
-multi-valued, and that declaration decides what a second value means:
+([predicates.json](predicates.json)) that declares each one's cardinality and
+value type, and those declarations decide what a write means:
 
 - `prefers_editor` is single-valued: a new value supersedes the old one. The
   old record is not overwritten; it flips to `status: superseded` with a link
   to its replacement, so the history is queryable.
 - `likes` is multi-valued: a new value is an additional fact, and repeating
   an existing one is idempotent.
+- `daily_step_goal` is a number and `uses_dark_mode` is a boolean: values are
+  validated against the declared type (the string "8000" is rejected with an
+  error naming the expected type, and the model corrects itself) and stored
+  as that type, so numbers compare numerically in recall filters.
 
 Supersession is a consequence of the schema, never a model judgment. The
-model's job is conversation; the database's job is semantics.
+model's job is conversation; the database's job is semantics. The schema
+itself is enforced by the demo's store layer; polign_db contributes the typed
+values, the filters, and the durability underneath it.
 
 Everything is backed by [polign_db](https://polign.com), so the source of
 truth is an object-store bucket. Writes are durable before they are
@@ -111,9 +117,10 @@ model to detect a contradiction; the schema did it.
 
 ## Recall is two primitives over one store
 
-- **Exact:** `recall(subject, predicate, kind, min_confidence)` is a filtered
-  query over typed metadata. `confidence` is stored as a number, so
-  `min_confidence: 0.8` compares numerically, not stringly.
+- **Exact:** `recall(subject, predicate, kind, min_confidence, value_min,
+  value_max)` is a filtered query over typed metadata. `confidence` and
+  number-typed values are stored as numbers, so `min_confidence: 0.8` and
+  `value_min: 8000` compare numerically, not stringly.
 - **Semantic:** `recall(query: "my dev setup")` embeds the query and searches
   the same records, still filtered to `status: active`.
 

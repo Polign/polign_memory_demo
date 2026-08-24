@@ -42,6 +42,9 @@ func TestIntegrationWrite(t *testing.T) {
 	if _, err := store.Forget("anup", "likes", ""); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := store.Forget("anup", "daily_step_goal", ""); err != nil {
+		t.Fatal(err)
+	}
 
 	if _, err := store.Remember("preference", "anup", "prefers_editor", "vim", 0, ""); err != nil {
 		t.Fatal(err)
@@ -54,6 +57,9 @@ func TestIntegrationWrite(t *testing.T) {
 		t.Fatalf("expected vim superseded, got %+v", res)
 	}
 	if _, err := store.Remember("preference", "anup", "likes", "coffee", 0.9, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Remember("fact", "anup", "daily_step_goal", 9000.0, 0, ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -111,6 +117,35 @@ func assertMemoryState(t *testing.T, store *Store) {
 	}
 	if len(likes) != 1 || likes[0].Value != "coffee" || likes[0].Confidence != 0.9 {
 		t.Fatalf("multi-valued record wrong (typed confidence must survive): %+v", likes)
+	}
+
+	// Typed values survive as their types, and range filters compare
+	// numerically in the database.
+	goals, err := store.Recall(RecallQuery{Subject: "anup", Predicate: "daily_step_goal"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(goals) != 1 {
+		t.Fatalf("expected one step goal, got %+v", goals)
+	}
+	if v, ok := goals[0].Value.(float64); !ok || v != 9000 {
+		t.Fatalf("number value did not round-trip typed through the server: %#v", goals[0].Value)
+	}
+	lo, hi := 8000.0, 10000.0
+	inRange, err := store.Recall(RecallQuery{Predicate: "daily_step_goal", ValueMin: &lo, ValueMax: &hi})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inRange) != 1 {
+		t.Fatalf("numeric range filter should match the goal, got %+v", inRange)
+	}
+	tooHigh := 9500.0
+	outOfRange, err := store.Recall(RecallQuery{Predicate: "daily_step_goal", ValueMin: &tooHigh})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(outOfRange) != 0 {
+		t.Fatalf("range filter matched below its bound: %+v", outOfRange)
 	}
 
 	semantic, err := store.Recall(RecallQuery{Query: "anup prefers editor neovim"})
