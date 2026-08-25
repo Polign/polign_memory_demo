@@ -212,3 +212,7 @@ POLIGN_MEMORY_DEMO_URL=http://127.0.0.1:24100 go test -run TestIntegrationRecall
 -script      replay user lines from a file instead of reading stdin, then exit
 -inspect     serve the read-only inspector at this address (e.g. 127.0.0.1:24102)
 ```
+
+## License
+
+[Apache 2.0](LICENSE).
