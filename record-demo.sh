@@ -4,6 +4,7 @@
 #
 #   ./run-demo.sh            # once beforehand, so the embedding model is cached
 #   asciinema rec demo.cast -c ./record-demo.sh
+#   agg --idle-time-limit 2 demo.cast demo.gif   # caps model-inference pauses
 #
 # Wipes ./demo-bucket so the recording starts from nothing. Uses its own ports
 # (24300/24301) so a stale server on the usual ones cannot poison the run.
