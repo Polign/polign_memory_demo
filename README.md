@@ -2,6 +2,8 @@
 
 A terminal agent whose memory is a typed, durable database, not retrieved text.
 
+![The four-act demo: durable writes, agent restart, server kill -9 and cold restart from the bucket, and a supersession](demo.gif)
+
 Most "AI memory" stuffs text into a vector store and hopes similarity search
 finds it again. This demo treats agent memory as what it actually is: state.
 Every memory is a typed record:
@@ -108,13 +110,16 @@ The typed value survived too, and it is still a number:
 
 ```
 you> Is my step goal above 8000?
-  → recall({"subject":"user","predicate":"daily_step_goal","value_min":8000})
+  → recall({"subject":"user","predicate":"daily_step_goal"})
   ← {"count":1,"records":[{"value":9000,...}]}
-claude> Yes, 9000 steps.
+claude> Yes, your step goal is 9000, which is above 8000.
 ```
 
-That comparison ran in the database as a numeric range filter, not as string
-matching in the model's context.
+The value came back as a JSON number after a cold restart, because the
+registry declared it one. When the model wants the database to do the
+comparison instead, recall takes value_min and value_max as numeric range
+filters over number-typed values (see the recall primitives below); the
+integration tests pin that path.
 
 **Act 4: the contradiction (the point of the demo).**
 
@@ -141,6 +146,8 @@ Run with `-inspect 127.0.0.1:24102` (for example
 address in a browser. You get one read-only table of every record the agent
 can see, refreshing as you talk; superseded rows are struck through and link
 to the record that replaced them.
+
+![The inspector after the four acts: the superseded Vim record struck through, Neovim active](inspector.png)
 
 ## Record the script
 
@@ -197,8 +204,11 @@ polign-server -store fs:/tmp/mem-bucket -http 127.0.0.1:24100 -grpc 127.0.0.1:24
 POLIGN_MEMORY_DEMO_URL=http://127.0.0.1:24100 go test -run TestIntegrationWrite -v
 kill -9 %1   # yes, -9
 polign-server -store fs:/tmp/mem-bucket -http 127.0.0.1:24100 -grpc 127.0.0.1:24101 &
-POLIGN_MEMORY_DEMO_URL=http://127.0.0.1:24100 go test -run TestIntegrationRecallAfterRestart -v
+POLIGN_MEMORY_DEMO_URL=http://127.0.0.1:24100 go test -run 'TestIntegrationRecallAfterRestart|TestIntegrationWriteAfterRestart' -v
 ```
+
+The last phase writes a fresh supersession against the cold-started server and
+asserts it is immediately visible to exact recall — the same order as act 4.
 
 ## Flags
 

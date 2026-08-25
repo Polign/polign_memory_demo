@@ -113,6 +113,71 @@ func TestIntegrationRecallAfterRestart(t *testing.T) {
 	assertMemoryState(t, store)
 }
 
+// TestIntegrationWriteAfterRestart is the demo's act 4 order: the server was
+// cold-started from nothing but the bucket, and only then does the
+// contradiction arrive. The supersession must be visible to exact recall
+// immediately after the ack — on a boot-restored index this exercises the
+// tail-overlay merge, not the plain in-memory listing, and it is the order
+// that polign-server v0.3.0 got wrong (writes after a cold boot were durable
+// and point-readable but invisible to filtered listing until persisted).
+// Run it after TestIntegrationRecallAfterRestart against the same server;
+// rerunning it against the same store is idempotent.
+func TestIntegrationWriteAfterRestart(t *testing.T) {
+	store := itStore(t)
+	// The server may still be priming from the bucket right after boot.
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		records, err := store.Recall(memkit.RecallQuery{Subject: "anup", Predicate: "prefers_editor"})
+		if err == nil && len(records) == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("memories not visible after restart: records=%v err=%v", records, err)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	res, err := store.Remember("preference", "anup", "prefers_editor", "helix", 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Existing && (len(res.Superseded) != 1 || res.Superseded[0].Value != "neovim") {
+		t.Fatalf("expected neovim superseded, got %+v", res)
+	}
+
+	active, err := store.Recall(memkit.RecallQuery{Subject: "anup", Predicate: "prefers_editor"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(active) != 1 || active[0].Value != "helix" || active[0].Status != "active" {
+		t.Fatalf("post-restart write not visible to exact recall: %+v", active)
+	}
+
+	history, err := store.Recall(memkit.RecallQuery{Subject: "anup", Predicate: "prefers_editor", IncludeHistory: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 3 {
+		t.Fatalf("history should hold vim, neovim, and helix, got %+v", history)
+	}
+	for _, rec := range history {
+		if rec.Value == "neovim" && (rec.Status != "superseded" || rec.SupersededBy != active[0].ID) {
+			t.Fatalf("neovim record not linked to its replacement: %+v", rec)
+		}
+	}
+
+	if _, err := store.Remember("preference", "anup", "likes", "tea", 0.9, ""); err != nil {
+		t.Fatal(err)
+	}
+	likes, err := store.Recall(memkit.RecallQuery{Subject: "anup", Predicate: "likes"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(likes) != 2 {
+		t.Fatalf("post-restart multi-valued write not visible: %+v", likes)
+	}
+}
+
 // assertMemoryState checks the invariants both phases share: one active
 // editor preference (neovim), a superseded vim linked to it, the multi-valued
 // like intact, and semantic recall returning only active records.

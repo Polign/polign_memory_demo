@@ -1,3 +1,12 @@
 polign_memory_demo
 demo-bucket/
 demo-server.log
+
+# macOS Finder metadata
+.DS_Store
+
+# demo files
+demo-agent
+demo.cast
+demo.gif
+inspector.png
