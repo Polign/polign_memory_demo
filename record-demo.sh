@@ -51,22 +51,26 @@ narrate() {
   sleep 1.5
 }
 
+# Extra script arguments go to every agent run, e.g.:
+#   ./record-demo.sh -model gpt-5
 agent() {
-  ./demo-agent -polign "http://$HTTP_ADDR" -inspect "$INSPECT_ADDR" -script "$1"
+  script="$1"
+  shift
+  ./demo-agent -polign "http://$HTTP_ADDR" -inspect "$INSPECT_ADDR" -script "$script" "$@"
 }
 
 narrate "act 1: a fresh bucket, a fresh agent. every write is durable before it is acknowledged."
 start_server
-agent demo/act1.txt
+agent demo/act1.txt "$@"
 
 narrate "act 2: kill the agent. start a new one against the same server. memory is not context."
-agent demo/act2.txt
+agent demo/act2.txt "$@"
 
 narrate "act 3: kill -9 the server. restart it from nothing but the bucket."
 kill -9 "$SERVER_PID" 2>/dev/null || true
 wait "$SERVER_PID" 2>/dev/null || true
 start_server
 narrate "the server is back, primed only from the bucket. act 4: a contradiction."
-agent demo/act34.txt
+agent demo/act34.txt "$@"
 
 narrate "done. the bucket is the database."
