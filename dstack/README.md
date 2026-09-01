@@ -14,6 +14,19 @@ application can reach them on the private Compose network.
 
 ## Demo
 
+### S3 machine failover
+
+![Node A writing a typed profile to S3, dying with all local state removed, and Node B recovering and updating the profile with supersession history](dstack-s3-failover-demo.gif)
+
+This is the stronger durability scenario. Node A writes seven typed records to
+an S3-backed Polign 0.4.3 store, is killed without a graceful shutdown, and has
+all of its containers, caches, and local volumes deleted. Node B starts as an
+independent Compose project, recovers the profile from S3, and continues in a
+new OpenAI conversation. It replaces Seattle with Portland and Go with Rust
+while retaining the old values as superseded history.
+
+### Single-machine process restart
+
 ![OpenAI agent storing typed memories, recovering them after the agent and Polign restart, and superseding Vim with Neovim in the dstack Compose workload](dstack-openai-demo.gif)
 
 The recording runs the dstack Compose workload locally with OpenAI. It shows
@@ -59,6 +72,30 @@ recording the credential. The capture runs the dstack Compose workload
 locally, demonstrates authenticated ingress, restarts both the agent and
 Polign, verifies durable recall, and displays supersession history.
 
+### Record an S3 machine-failover demo
+
+For a stronger failure scenario, configure `POLIGN_STORE` and the standard AWS
+credential chain in `dstack/.env`, using an existing bucket and a dedicated
+prefix. Then run:
+
+```sh
+./dstack/record-s3-failover-demo.sh
+```
+
+The recorder starts Machine A, writes a typed user profile, kills the agent and
+Polign without a graceful shutdown, and deletes all of Machine A's local
+volumes. It then starts Machine B as a separate Compose project against the
+same S3 prefix. A new OpenAI conversation recalls the profile, updates two
+single-valued facts, and displays their cross-machine supersession history.
+
+This proves durable memory continuity, not transcript persistence: the model's
+message history dies with Machine A. Machine B continues from records recovered
+from S3, which is the behavior this memory architecture is designed to provide.
+
+The command updates the repository's `dstack/dstack-s3-failover-demo.gif` and
+produces a local, Git-ignored `.cast` file. Neither the AWS credentials nor the
+configured bucket URI are written to the recording.
+
 ## Publish the application image
 
 The repository workflow publishes multi-architecture images to
@@ -68,7 +105,7 @@ mutable `latest` or branch tag because the image identity is part of what the
 attested Compose configuration is meant to describe.
 
 Polign itself is not redistributed in this application image. `polign-init`
-downloads the official 0.4.1 Linux release for the CVM architecture and
+downloads the official 0.4.3 Linux release for the CVM architecture and
 checks its pinned SHA-256 digest before the database starts.
 
 ## Deploy to Phala Cloud

@@ -13,11 +13,11 @@ services:
         case "$$(uname -m)" in
           x86_64)
             artifact=polign_db_linux_amd64.tar.gz
-            checksum=792fa6d7cc1df0e7ba4ab5e140640c11f02ca06fb5fb81bec91c1178ebaf6100
+            checksum=598419bdf46c242b426326e31ad7c43523c7f1ebe8397548fefd44afe400c6e7
             ;;
           aarch64|arm64)
             artifact=polign_db_linux_arm64.tar.gz
-            checksum=d229225dca005390aa4fb30afe9743344a0eee61d74dc7f70797400f1176b0eb
+            checksum=1cf1b88cb9839bd51978f07b957860045c42428cddf9719daffd809a0307d6a0
             ;;
           *)
             echo "Unsupported architecture: $$(uname -m)" >&2
@@ -28,12 +28,12 @@ services:
         mkdir -p /var/lib/polign/bin /var/lib/polign/cache /var/lib/polign/store
         chmod 0770 /var/lib/polign /var/lib/polign/cache /var/lib/polign/store
         wget -q -O /tmp/polign.tar.gz \
-          "https://github.com/Polign/polign/releases/download/v0.4.1/$${artifact}"
+          "https://github.com/Polign/polign/releases/download/v0.4.3/$${artifact}"
         echo "$${checksum}  /tmp/polign.tar.gz" | sha256sum -c -
         tar -xzf /tmp/polign.tar.gz -C /tmp polign-server
         mv /tmp/polign-server /var/lib/polign/bin/polign-server
         chmod 0555 /var/lib/polign/bin/polign-server
-        /var/lib/polign/bin/polign-server -version | grep -Fx 0.4.1
+        /var/lib/polign/bin/polign-server -version | grep -Fx 0.4.3
     volumes:
       - polign-data:/var/lib/polign
     cap_drop:
@@ -51,7 +51,7 @@ services:
       - -grpc
       - :23001
       - -store
-      - fs:/var/lib/polign/store
+      - ${POLIGN_STORE:-fs:/var/lib/polign/store}
       - -disk-cache-dir
       - /var/lib/polign/cache
       - -disk-cache-bytes
@@ -63,6 +63,16 @@ services:
     depends_on:
       polign-init:
         condition: service_completed_successfully
+    environment:
+      AWS_REGION: ${AWS_REGION:-}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      AWS_ENDPOINT_URL_S3: ${AWS_ENDPOINT_URL_S3:-}
+      AWS_S3_FORCE_PATH_STYLE: ${AWS_S3_FORCE_PATH_STYLE:-}
+      POLIGN_STORE_REGION: ${POLIGN_STORE_REGION:-}
+      POLIGN_STORE_ROLE_ARN: ${POLIGN_STORE_ROLE_ARN:-}
+      POLIGN_STORE_EXTERNAL_ID: ${POLIGN_STORE_EXTERNAL_ID:-}
     volumes:
       - polign-data:/var/lib/polign
     user: "65532:0"
@@ -97,7 +107,7 @@ services:
       - ${MODEL_PROVIDER:-anthropic}
       - -collection
       - ${POLIGN_COLLECTION:-memories}
-      - -trace=false
+      - -trace=${TRACE_TOOLS:-false}
     environment:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}

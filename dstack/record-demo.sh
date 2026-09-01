@@ -158,7 +158,7 @@ run_demo() {
 }
 
 if [ "${1:-}" = "--run" ]; then
-    DSTACK_DEMO_PROJECT="${DSTACK_DEMO_PROJECT:-polign-memory-recording-$$}"
+    DSTACK_DEMO_PROJECT="${DSTACK_DEMO_PROJECT:-demo}"
     export DSTACK_DEMO_PROJECT
     run_demo
     exit 0
@@ -173,8 +173,13 @@ command -v agg >/dev/null 2>&1 || { echo "agg is required" >&2; exit 1; }
 OUTPUT_BASE="${1:-$SCRIPT_DIR/dstack-openai-demo}"
 CAST_FILE="${OUTPUT_BASE}.cast"
 GIF_FILE="${OUTPUT_BASE}.gif"
-DSTACK_DEMO_PROJECT="polign-memory-recording-$$"
+DSTACK_DEMO_PROJECT="demo"
 export DSTACK_DEMO_PROJECT
+
+if [ -n "$(compose ps -aq)" ]; then
+    echo "Compose project '$DSTACK_DEMO_PROJECT' already exists; remove it before recording" >&2
+    exit 1
+fi
 
 printf 'Preparing the application image before recording...\n'
 compose build --quiet >/dev/null 2>&1

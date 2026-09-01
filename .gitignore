@@ -11,3 +11,4 @@ demo-agent
 demo.cast
 inspector.png
 dstack/dstack-openai-demo.cast
+dstack/dstack-s3-failover-demo.cast
