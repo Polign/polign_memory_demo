@@ -133,18 +133,23 @@ func toolSpecs() []toolSpec {
 // share.
 type toolbox struct {
 	store *memkit.Store
+	trace bool
 }
 
 // run executes one tool call, printing it and its result. Errors return as
 // (message, true) so the model can self-repair against the store's validation.
 func (tb *toolbox) run(name string, input []byte) (string, bool) {
-	fmt.Printf("%s  %s→ %s(%s)%s\n", dim, cyan, name, compactJSON(input), reset)
-	result, isErr := tb.dispatch(name, input)
-	marker := "←"
-	if isErr {
-		marker = "← error:"
+	if tb.trace {
+		fmt.Printf("%s  %s→ %s(%s)%s\n", dim, cyan, name, compactJSON(input), reset)
 	}
-	fmt.Printf("%s  %s %s%s\n", dim, marker, compactJSON([]byte(result)), reset)
+	result, isErr := tb.dispatch(name, input)
+	if tb.trace {
+		marker := "←"
+		if isErr {
+			marker = "← error:"
+		}
+		fmt.Printf("%s  %s %s%s\n", dim, marker, compactJSON([]byte(result)), reset)
+	}
 	return result, isErr
 }
 

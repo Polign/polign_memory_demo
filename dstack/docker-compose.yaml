@@ -1,0 +1,202 @@
+name: polign-memory-dstack
+
+services:
+  # Polign publishes static binaries rather than a redistributable container.
+  # Download the official release for this CVM's architecture and verify the
+  # release digest before the database is allowed to start.
+  polign-init:
+    image: alpine:3.22.1@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        case "$$(uname -m)" in
+          x86_64)
+            artifact=polign_db_linux_amd64.tar.gz
+            checksum=598419bdf46c242b426326e31ad7c43523c7f1ebe8397548fefd44afe400c6e7
+            ;;
+          aarch64|arm64)
+            artifact=polign_db_linux_arm64.tar.gz
+            checksum=1cf1b88cb9839bd51978f07b957860045c42428cddf9719daffd809a0307d6a0
+            ;;
+          *)
+            echo "Unsupported architecture: $$(uname -m)" >&2
+            exit 1
+            ;;
+        esac
+
+        mkdir -p /var/lib/polign/bin /var/lib/polign/cache /var/lib/polign/store
+        chmod 0770 /var/lib/polign /var/lib/polign/cache /var/lib/polign/store
+        wget -q -O /tmp/polign.tar.gz \
+          "https://github.com/Polign/polign/releases/download/v0.4.3/$${artifact}"
+        echo "$${checksum}  /tmp/polign.tar.gz" | sha256sum -c -
+        tar -xzf /tmp/polign.tar.gz -C /tmp polign-server
+        mv /tmp/polign-server /var/lib/polign/bin/polign-server
+        chmod 0555 /var/lib/polign/bin/polign-server
+        /var/lib/polign/bin/polign-server -version | grep -Fx 0.4.3
+    volumes:
+      - polign-data:/var/lib/polign
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+
+  polign:
+    image: alpine:3.22.1@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1
+    command:
+      - /var/lib/polign/bin/polign-server
+      - -http
+      - :23000
+      - -grpc
+      - :23001
+      - -store
+      - ${POLIGN_STORE:-fs:/var/lib/polign/store}
+      - -disk-cache-dir
+      - /var/lib/polign/cache
+      - -disk-cache-bytes
+      - "1073741824"
+      - -segment-cache-bytes
+      - "134217728"
+      - -overlay-max-buffered
+      - "100000"
+    depends_on:
+      polign-init:
+        condition: service_completed_successfully
+    environment:
+      AWS_REGION: ${AWS_REGION:-}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      AWS_ENDPOINT_URL_S3: ${AWS_ENDPOINT_URL_S3:-}
+      AWS_S3_FORCE_PATH_STYLE: ${AWS_S3_FORCE_PATH_STYLE:-}
+      POLIGN_STORE_REGION: ${POLIGN_STORE_REGION:-}
+      POLIGN_STORE_ROLE_ARN: ${POLIGN_STORE_ROLE_ARN:-}
+      POLIGN_STORE_EXTERNAL_ID: ${POLIGN_STORE_EXTERNAL_ID:-}
+    volumes:
+      - polign-data:/var/lib/polign
+    user: "65532:0"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:23000/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    stop_grace_period: 2m
+    restart: unless-stopped
+
+  memory-demo:
+    # For dstack deployment, set MEMORY_DEMO_IMAGE to an immutable
+    # ghcr.io/polign/polign-memory-demo@sha256:... reference produced by CI.
+    image: ${MEMORY_DEMO_IMAGE:-polign-memory-demo:local}
+    command:
+      - -polign
+      - http://polign:23000
+      - -web
+      - :8080
+      - -data-dir
+      - /var/lib/polign-memory/model
+      - -model
+      - ${MODEL:-claude-opus-5}
+      - -provider
+      - ${MODEL_PROVIDER:-anthropic}
+      - -collection
+      - ${POLIGN_COLLECTION:-memories}
+      - -trace=${TRACE_TOOLS:-false}
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+    depends_on:
+      polign:
+        condition: service_healthy
+    volumes:
+      - model-cache:/var/lib/polign-memory
+    user: "65532:0"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 2m
+    restart: unless-stopped
+
+  gateway:
+    image: haproxy:3.2.4-alpine@sha256:436a5691e6fd563ca4090e351048fda1066bec93b595cc8eaf26988c65eb1152
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        for value in "$${DSTACK_USERNAME}" "$${DSTACK_PASSWORD}"; do
+          case "$${value}" in
+            ""|*[!A-Za-z0-9._~-]*)
+              echo "DSTACK_USERNAME and DSTACK_PASSWORD must be non-empty URL-safe values" >&2
+              exit 1
+              ;;
+          esac
+        done
+
+        umask 077
+        cat > /tmp/haproxy.cfg <<EOF
+        global
+          maxconn 128
+
+        defaults
+          mode http
+          timeout connect 5s
+          timeout client 2m
+          timeout server 2m
+          timeout http-request 10s
+
+        userlist demo_users
+          user $${DSTACK_USERNAME} insecure-password $${DSTACK_PASSWORD}
+
+        frontend public_http
+          bind :8080
+          acl health path -i /healthz
+          http-request allow if health
+          http-request auth realm Polign-Memory unless { http_auth(demo_users) }
+          default_backend memory_demo
+
+        backend memory_demo
+          option httpchk GET /healthz
+          http-check expect status 200
+          server memory-demo memory-demo:8080 check
+        EOF
+
+        exec haproxy -W -db -f /tmp/haproxy.cfg
+    environment:
+      DSTACK_USERNAME: ${DSTACK_USERNAME:-polign}
+      DSTACK_PASSWORD: ${DSTACK_PASSWORD}
+    depends_on:
+      memory-demo:
+        condition: service_healthy
+    ports:
+      - "${MEMORY_DEMO_PORT:-8080}:8080"
+    user: "65532:65532"
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+volumes:
+  model-cache:
+  polign-data:

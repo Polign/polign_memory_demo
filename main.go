@@ -27,9 +27,11 @@ func main() {
 	predicatesPath := flag.String("predicates", "", "predicate registry JSON (default: the embedded registry)")
 	scriptPath := flag.String("script", "", "replay user lines from this file instead of reading stdin, then exit")
 	inspectAddr := flag.String("inspect", "", "serve a read-only inspector page at this address (e.g. 127.0.0.1:24102)")
+	webAddr := flag.String("web", "", "serve the chat UI and memory inspector at this address instead of using the terminal (e.g. :8080)")
+	traceTools := flag.Bool("trace", true, "print memory tool inputs and results; disable when deployment logs are public")
 	flag.Parse()
 
-	if err := run(*polignURL, *collection, *model, *provider, *dataDir, *dataURL, *predicatesPath, *scriptPath, *inspectAddr); err != nil {
+	if err := run(*polignURL, *collection, *model, *provider, *dataDir, *dataURL, *predicatesPath, *scriptPath, *inspectAddr, *webAddr, *traceTools); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
@@ -45,7 +47,7 @@ func inferProvider(model string) string {
 	return "anthropic"
 }
 
-func run(polignURL, collection, model, provider, dataDir, dataURL, predicatesPath, scriptPath, inspectAddr string) error {
+func run(polignURL, collection, model, provider, dataDir, dataURL, predicatesPath, scriptPath, inspectAddr, webAddr string, traceTools bool) error {
 	logf := func(format string, args ...any) { fmt.Printf(dim+format+reset+"\n", args...) }
 
 	raw := defaultPredicates
@@ -92,29 +94,42 @@ func run(polignURL, collection, model, provider, dataDir, dataURL, predicatesPat
 	if provider == "" {
 		provider = inferProvider(model)
 	}
+	if webAddr != "" {
+		var credential string
+		switch provider {
+		case "anthropic":
+			credential = os.Getenv("ANTHROPIC_API_KEY")
+		case "openai":
+			credential = os.Getenv("OPENAI_API_KEY")
+		}
+		if credential == "" {
+			return fmt.Errorf("%s model credential is required in web mode", provider)
+		}
+	}
 	var agent Agent
 	switch provider {
 	case "anthropic":
 		if os.Getenv("ANTHROPIC_API_KEY") == "" {
 			logf("ANTHROPIC_API_KEY is not set; using whatever credentials the Anthropic SDK resolves (e.g. ant auth login)")
 		}
-		agent = newAnthropicAgent(model, store)
+		agent = newAnthropicAgent(model, store, traceTools)
 	case "openai":
 		if os.Getenv("OPENAI_API_KEY") == "" {
 			logf("OPENAI_API_KEY is not set; the OpenAI SDK will fail without it")
 		}
-		agent = newOpenAIAgent(model, store)
+		agent = newOpenAIAgent(model, store, traceTools)
 	default:
 		return fmt.Errorf("unknown provider %q (want anthropic or openai)", provider)
 	}
 
 	fmt.Printf("polign memory demo: %s (%s) against %s (collection %q)\n", model, provider, polignURL, collection)
+	if webAddr != "" {
+		fmt.Printf("web UI: http://%s\n", webAddr)
+		return serveWeb(webAddr, webHandler(agent, labelForProvider(provider), store, collection, db.Healthy))
+	}
 	fmt.Printf(dim + "tool calls print as they happen. /quit exits, /reset clears the conversation (not the store).\n" + reset)
 
-	label := "claude"
-	if provider == "openai" {
-		label = "gpt"
-	}
+	label := labelForProvider(provider)
 
 	var scanErr error
 	next := stdinSource(&scanErr)
@@ -129,6 +144,13 @@ func run(polignURL, collection, model, provider, dataDir, dataURL, predicatesPat
 		return err
 	}
 	return scanErr
+}
+
+func labelForProvider(provider string) string {
+	if provider == "openai" {
+		return "gpt"
+	}
+	return "claude"
 }
 
 // repl drives the conversation until next reports no more lines or the user

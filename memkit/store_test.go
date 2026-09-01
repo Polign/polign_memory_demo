@@ -18,8 +18,9 @@ import (
 // delete. Filters support scalar equality and {"$gte": n}, the subset the
 // store uses.
 type fakePolign struct {
-	mu   sync.Mutex
-	recs map[string]StoredVector // id -> record
+	mu       sync.Mutex
+	recs     map[string]StoredVector // id -> record
+	coldList bool
 }
 
 func newFakePolign() *fakePolign {
@@ -105,6 +106,11 @@ func (f *fakePolign) handler() http.Handler {
 			writeJSON(w, map[string]any{"deleted": ok})
 
 		case strings.HasSuffix(path, "/vectors") && r.Method == http.MethodGet:
+			if f.coldList {
+				w.WriteHeader(http.StatusNotImplemented)
+				writeJSON(w, map[string]any{"error": "listing is not supported for a cold-served resource: its records live in segments"})
+				return
+			}
 			filter := parseFilter(r.URL.Query().Get("filter"))
 			var out []StoredVector
 			for _, rec := range f.recs {
@@ -271,6 +277,49 @@ func TestSingleValuedSupersedes(t *testing.T) {
 	}
 	if len(history) != 2 {
 		t.Fatalf("history should hold both records, got %+v", history)
+	}
+}
+
+func TestColdCollectionFallbackSupportsRecallAndSupersession(t *testing.T) {
+	store, fake := newTestStore(t)
+
+	if _, err := store.Remember("fact", "user", "lives_in", "Seattle", 0, ""); err != nil {
+		t.Fatal(err)
+	}
+	fake.coldList = true
+
+	recovered, err := store.Recall(RecallQuery{Subject: "user", Predicate: "lives_in"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recovered) != 1 || recovered[0].Value != "Seattle" {
+		t.Fatalf("cold recall = %+v, want active Seattle", recovered)
+	}
+
+	updated, err := store.Remember("fact", "user", "lives_in", "Portland", 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updated.Superseded) != 1 || updated.Superseded[0].Value != "Seattle" {
+		t.Fatalf("cold supersession = %+v, want Seattle superseded", updated)
+	}
+
+	history, err := store.Recall(RecallQuery{
+		Subject: "user", Predicate: "lives_in", IncludeHistory: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 2 {
+		t.Fatalf("cold history = %+v, want Seattle and Portland", history)
+	}
+
+	forgotten, err := store.Forget("user", "lives_in", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if forgotten != 2 {
+		t.Fatalf("cold forget removed %d records, want 2", forgotten)
 	}
 }
 

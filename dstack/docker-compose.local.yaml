@@ -1,0 +1,5 @@
+services:
+  memory-demo:
+    build:
+      context: ..
+    image: polign-memory-demo:local

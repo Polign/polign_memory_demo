@@ -285,15 +285,7 @@ func (s *Store) Recall(q RecallQuery) ([]Record, error) {
 		return out, nil
 	}
 
-	vectors, _, err := s.db.List(s.collection, filter, limit)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]Record, 0, len(vectors))
-	for _, v := range vectors {
-		out = append(out, recordFromMetadata(v.ID, v.Metadata))
-	}
-	return out, nil
+	return s.filteredRecords(filter, limit)
 }
 
 // Forget tombstones matching records: their status flips to "deleted", which
@@ -320,13 +312,12 @@ func (s *Store) Forget(subject, predicate, value string) (int, error) {
 		}
 		filter["value"] = typed
 	}
-	vectors, _, err := s.db.List(s.collection, filter, 100)
+	records, err := s.filteredRecords(filter, 100)
 	if err != nil {
 		return 0, err
 	}
 	forgotten := 0
-	for _, v := range vectors {
-		rec := recordFromMetadata(v.ID, v.Metadata)
+	for _, rec := range records {
 		if rec.Status == "deleted" {
 			continue
 		}
@@ -366,17 +357,38 @@ func (s *Store) parseValue(predicate, value string) (any, error) {
 
 // activeRecords lists the active records for (subject, predicate).
 func (s *Store) activeRecords(subject, predicate string) ([]Record, error) {
-	vectors, _, err := s.db.List(s.collection, map[string]any{
+	return s.filteredRecords(map[string]any{
 		"subject":   subject,
 		"predicate": predicate,
 		"status":    "active",
 	}, 100)
-	if err != nil {
+}
+
+// filteredRecords uses deterministic listing on a warm collection. A server
+// cold-started from an object store intentionally has no complete in-memory
+// listing index, so Polign rejects List with ErrColdListUnsupported. Filtered
+// vector search scans the same cold segments and merges the WAL tail, making
+// it the exact-filter fallback for S3/GCS/Azure failover nodes.
+func (s *Store) filteredRecords(filter map[string]any, limit int) ([]Record, error) {
+	vectors, _, err := s.db.List(s.collection, filter, limit)
+	if err == nil {
+		out := make([]Record, 0, len(vectors))
+		for _, v := range vectors {
+			out = append(out, recordFromMetadata(v.ID, v.Metadata))
+		}
+		return out, nil
+	}
+	if !strings.Contains(err.Error(), "listing is not supported for a cold-served resource") {
 		return nil, err
 	}
-	out := make([]Record, 0, len(vectors))
-	for _, v := range vectors {
-		out = append(out, recordFromMetadata(v.ID, v.Metadata))
+
+	hits, searchErr := s.db.Search(s.collection, s.embed("typed durable memory record"), limit, filter)
+	if searchErr != nil {
+		return nil, searchErr
+	}
+	out := make([]Record, 0, len(hits))
+	for _, hit := range hits {
+		out = append(out, recordFromMetadata(hit.ID, hit.Metadata))
 	}
 	return out, nil
 }
