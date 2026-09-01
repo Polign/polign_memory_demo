@@ -9,8 +9,9 @@ MODEL_PROVIDER="${MODEL_PROVIDER:-anthropic}"
 MODEL="${MODEL:-claude-opus-5}"
 ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-smoke-test-key-not-called}"
 OPENAI_API_KEY="${OPENAI_API_KEY:-smoke-test-key-not-called}"
+POLIGN_STORE="fs:/var/lib/polign/store"
 export DSTACK_USERNAME DSTACK_PASSWORD MEMORY_DEMO_PORT MODEL_PROVIDER MODEL
-export ANTHROPIC_API_KEY OPENAI_API_KEY
+export ANTHROPIC_API_KEY OPENAI_API_KEY POLIGN_STORE
 
 cleanup() {
     docker compose -f docker-compose.yaml -f docker-compose.local.yaml down

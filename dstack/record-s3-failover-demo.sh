@@ -22,7 +22,10 @@ set +a
 
 : "${OPENAI_API_KEY:?OPENAI_API_KEY must be set in dstack/.env}"
 : "${POLIGN_STORE:?POLIGN_STORE must be an s3:// URI in dstack/.env}"
-: "${AWS_REGION:?AWS_REGION must be set in dstack/.env}"
+: "${AWS_ACCESS_KEY_ID:?AWS_ACCESS_KEY_ID must provide the source AWS identity}"
+: "${AWS_SECRET_ACCESS_KEY:?AWS_SECRET_ACCESS_KEY must provide the source AWS identity}"
+STORE_REGION="${POLIGN_STORE_REGION:-${AWS_REGION:-}}"
+: "${STORE_REGION:?POLIGN_STORE_REGION (or AWS_REGION for direct access) must be set in dstack/.env}"
 case "$POLIGN_STORE" in
     s3://*) ;;
     *) echo "POLIGN_STORE must begin with s3:// for this recording" >&2; exit 1 ;;
@@ -35,7 +38,7 @@ DSTACK_PASSWORD="${DSTACK_PASSWORD:?DSTACK_PASSWORD must be set in dstack/.env}"
 MEMORY_DEMO_PORT="${MEMORY_DEMO_PORT:-18080}"
 COMPOSE_PROGRESS="plain"
 export MODEL_PROVIDER MODEL DSTACK_USERNAME DSTACK_PASSWORD MEMORY_DEMO_PORT
-export POLIGN_STORE AWS_REGION COMPOSE_PROGRESS
+export POLIGN_STORE AWS_REGION POLIGN_STORE_REGION COMPOSE_PROGRESS
 
 compose() {
     project="$1"
@@ -115,6 +118,11 @@ run_demo() {
     narrate "Scene 1/6 — Two machines, one S3-backed source of truth"
     printf 'Machine A and Machine B use different containers, caches, and local volumes.\n'
     printf 'Shared backend: Amazon S3 (bucket and prefix hidden from the recording).\n'
+    if [ -n "${POLIGN_STORE_ROLE_ARN:-}" ]; then
+        printf 'AWS access: sealed source principal -> STS AssumeRole -> short-lived store credentials.\n'
+    else
+        printf 'AWS access: sealed source principal with direct S3 permissions (role assumption is preferred).\n'
+    fi
     printf 'Collection: %s\n' "$POLIGN_COLLECTION"
     printf 'Only one machine runs at a time; no local state crosses the handoff.\n'
     sleep 6
