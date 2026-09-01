@@ -12,6 +12,16 @@ confidential VM:
 Polign's HTTP and gRPC data planes are not published. Only the memory
 application can reach them on the private Compose network.
 
+## Demo
+
+![OpenAI agent storing typed memories, recovering them after the agent and Polign restart, and superseding Vim with Neovim in the dstack Compose workload](dstack-openai-demo.gif)
+
+The recording runs the dstack Compose workload locally with OpenAI. It shows
+the authenticated gateway, private Polign data plane, typed memory inspector,
+process restarts with durable recall, and cardinality-driven supersession. A
+local recording demonstrates the workload behavior; hardware attestation is
+available only after deploying the same workload to a dstack confidential VM.
+
 ## Local validation
 
 The local override builds the memory application from this checkout. Direct
@@ -33,6 +43,21 @@ supersession history.
 
 Run `./smoke-test.sh` to build the image and verify that anonymous access is
 rejected while health, authenticated UI, and inspector routes work.
+
+## Record the OpenAI dstack demo
+
+Create `dstack/.env` from `.env.example`, select the OpenAI provider, and add
+`OPENAI_API_KEY`. The file is ignored by Git. Then run:
+
+```sh
+./dstack/record-demo.sh
+```
+
+This updates the repository's `dstack/dstack-openai-demo.gif` and produces a
+local, Git-ignored `dstack/dstack-openai-demo.cast`, without printing or
+recording the credential. The capture runs the dstack Compose workload
+locally, demonstrates authenticated ingress, restarts both the agent and
+Polign, verifies durable recall, and displays supersession history.
 
 ## Publish the application image
 

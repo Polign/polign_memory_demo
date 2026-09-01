@@ -10,3 +10,4 @@ dstack/.env
 demo-agent
 demo.cast
 inspector.png
+dstack/dstack-openai-demo.cast
