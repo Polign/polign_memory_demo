@@ -21,7 +21,7 @@ type openaiAgent struct {
 	messages []openai.ChatCompletionMessageParamUnion
 }
 
-func newOpenAIAgent(model string, store *memkit.Store) *openaiAgent {
+func newOpenAIAgent(model string, store *memkit.Store, trace bool) *openaiAgent {
 	specs := toolSpecs()
 	tools := make([]openai.ChatCompletionToolUnionParam, len(specs))
 	for i, spec := range specs {
@@ -38,7 +38,7 @@ func newOpenAIAgent(model string, store *memkit.Store) *openaiAgent {
 	return &openaiAgent{
 		client: openai.NewClient(),
 		model:  model,
-		tb:     &toolbox{store: store},
+		tb:     &toolbox{store: store, trace: trace},
 		system: systemPrompt(store.Registry()),
 		tools:  tools,
 	}

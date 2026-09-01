@@ -149,6 +149,23 @@ to the record that replaced them.
 
 ![The inspector after the four acts: the superseded Vim record struck through, Neovim active](inspector.png)
 
+## Run it in a dstack TEE
+
+The [dstack deployment](dstack/) runs the agent, Polign, persistent storage,
+and an authenticated browser UI inside one confidential VM. It includes a
+local Compose override, a deployment configuration, checksum-pinned Polign
+installation, and an end-to-end routing/authentication smoke test.
+
+The application also has a web mode outside dstack:
+
+```sh
+go run . -web 127.0.0.1:8080 -inspect ""
+```
+
+Open <http://127.0.0.1:8080>; the memory inspector is available at
+`/memories/`. Use `-trace=false` when logs must not contain memory tool inputs
+and results.
+
 ## Record the script
 
 `record-demo.sh` replays all four acts hands-free against a fresh bucket,
@@ -221,6 +238,8 @@ asserts it is immediately visible to exact recall — the same order as act 4.
 -data-dir    embedding model cache dir     (default: user cache dir)
 -script      replay user lines from a file instead of reading stdin, then exit
 -inspect     serve the read-only inspector at this address (e.g. 127.0.0.1:24102)
+-web        serve browser chat + inspector instead of the terminal (e.g. :8080)
+-trace      print memory tool inputs/results (default true; disable for public logs)
 ```
 
 ## License
