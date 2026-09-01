@@ -1,6 +1,7 @@
 polign_memory_demo
 demo-bucket/
 demo-server.log
+dstack/.env
 
 # macOS Finder metadata
 .DS_Store
