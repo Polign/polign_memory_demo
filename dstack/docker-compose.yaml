@@ -51,7 +51,7 @@ services:
       - -grpc
       - :23001
       - -store
-      - ${POLIGN_STORE:-fs:/var/lib/polign/store}
+      - "${POLIGN_STORE:?POLIGN_STORE must be an s3:// URI; local tests must opt into fs: explicitly}"
       - -disk-cache-dir
       - /var/lib/polign/cache
       - -disk-cache-bytes

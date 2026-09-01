@@ -1,172 +1,222 @@
 # Polign memory demo on dstack
 
-This deployment runs the complete memory application inside one dstack
-confidential VM:
+This demo runs an S3-backed agent memory system inside a dstack confidential
+VM. S3 is the database: acknowledged memories are written to the bucket before
+the tool call returns, while the CVM and its local volumes are disposable.
 
-- the browser chat and read-only memory inspector
-- Polign's durable vector and typed-metadata store
+The VM contains:
+
+- the browser chat and read-only typed-memory inspector
+- Polign, using a dedicated S3 prefix as its durable source of truth
 - an authenticated gateway as the only published service
-- encrypted model-provider credentials supplied at deployment time
-- persistent volumes for Polign state and the public embedding-model cache
+- sealed model-provider and AWS source credentials
+- local Polign and embedding-model caches that can be rebuilt from scratch
 
-Polign's HTTP and gRPC data planes are not published. Only the memory
-application can reach them on the private Compose network.
+Polign's HTTP and gRPC ports stay on the private Compose network. Only the
+authenticated browser gateway is published.
 
-## Demo
-
-### S3 machine failover
+## Demo: replace the machine, keep the memory
 
 ![Node A writing a typed profile to S3, dying with all local state removed, and Node B recovering and updating the profile with supersession history](dstack-s3-failover-demo.gif)
 
-This is the stronger durability scenario. Node A writes seven typed records to
-an S3-backed Polign 0.4.3 store, is killed without a graceful shutdown, and has
-all of its containers, caches, and local volumes deleted. Node B starts as an
-independent Compose project, recovers the profile from S3, and continues in a
-new OpenAI conversation. It replaces Seattle with Portland and Go with Rust
-while retaining the old values as superseded history.
+The recording starts Machine A with an S3-backed Polign store and writes seven
+typed records. It then kills the agent and Polign without a graceful shutdown
+and deletes every container, cache, and local volume owned by Machine A.
 
-### Single-machine process restart
+Machine B starts as a separate Compose project with empty local volumes and the
+same S3 prefix. In a new OpenAI conversation it recovers the profile, replaces
+Seattle with Portland and Go with Rust, and retains the old values as
+superseded history.
 
-![OpenAI agent storing typed memories, recovering them after the agent and Polign restart, and superseding Vim with Neovim in the dstack Compose workload](dstack-openai-demo.gif)
+The transcript does not survive the handoff; the typed memory does. That is the
+architecture this demo is intended to prove.
 
-The recording runs the dstack Compose workload locally with OpenAI. It shows
-the authenticated gateway, private Polign data plane, typed memory inspector,
-process restarts with durable recall, and cardinality-driven supersession. A
-local recording demonstrates the workload behavior; hardware attestation is
-available only after deploying the same workload to a dstack confidential VM.
+## S3 configuration
 
-## Local validation
+Create or choose an S3 bucket and give this deployment its own prefix:
 
-The local override builds the memory application from this checkout. Direct
-startup requires the selected provider's API key. The smoke test supplies a
-nonfunctional placeholder because it validates startup, authentication, and
-routing without sending a model request.
+```sh
+POLIGN_STORE=s3://my-polign-bucket/memory-demo
+POLIGN_STORE_REGION=us-west-2
+```
+
+Do not share one prefix between unrelated deployments. Polign stores its write
+log, collection metadata, and immutable segments beneath that prefix.
+
+### Role-based credentials
+
+The recommended configuration separates the credential sealed into the CVM
+from the identity that can read and write memory:
+
+```text
+sealed source key -> AWS STS AssumeRole -> short-lived store-role credentials -> S3 prefix
+```
+
+Configure the source identity with:
+
+```sh
+AWS_ACCESS_KEY_ID=...
+AWS_SECRET_ACCESS_KEY=...
+```
+
+The source principal should have only `sts:AssumeRole` permission on one store
+role. It does not need direct access to S3.
+
+Configure the target store role with:
+
+```sh
+POLIGN_STORE_ROLE_ARN=arn:aws:iam::123456789012:role/polign-memory-store
+POLIGN_STORE_EXTERNAL_ID=<random deployment-specific value>
+```
+
+The store role's trust policy must name the source principal, allow
+`sts:AssumeRole`, and require the same external ID. Its permissions policy
+should grant:
+
+- `s3:GetObject`, `s3:PutObject`, and `s3:DeleteObject` on the dedicated prefix
+- `s3:ListBucket` on the bucket, restricted to the dedicated prefix
+
+Polign calls STS and signs S3 requests with the returned short-lived
+credentials. The AWS SDK caches and refreshes those role credentials before
+they expire.
+
+Phala is not an EC2 instance and does not automatically receive an AWS
+instance role. `POLIGN_STORE_ROLE_ARN` therefore still needs a usable source
+credential. Phala seals the environment supplied at deployment time; keeping
+the source principal limited to `sts:AssumeRole` minimizes what that sealed key
+can do.
+
+Direct S3 credentials work when `POLIGN_STORE_ROLE_ARN` is omitted, but they
+give the sealed key access to the data and are not the recommended path.
+
+## Configure the demo
+
+Copy the example environment file and fill in the S3, AWS, browser, model, and
+immutable image values:
 
 ```sh
 cd dstack
-export DSTACK_PASSWORD="$(openssl rand -hex 32)"
-export ANTHROPIC_API_KEY=...
-docker compose -f docker-compose.yaml -f docker-compose.local.yaml \
-  up -d --build --wait
+cp .env.example .env
+openssl rand -hex 32
 ```
 
-Open <http://127.0.0.1:8080> and sign in as `polign` with the generated
-password. The **inspect memories** link shows the typed records and their
-supersession history.
+Put the generated value in `DSTACK_PASSWORD`. The `.env` file is ignored by
+Git and must never be committed.
 
-Run `./smoke-test.sh` to build the image and verify that anonymous access is
-rejected while health, authenticated UI, and inspector routes work.
-
-## Record the OpenAI dstack demo
-
-Create `dstack/.env` from `.env.example`, select the OpenAI provider, and add
-`OPENAI_API_KEY`. The file is ignored by Git. Then run:
+For OpenAI:
 
 ```sh
-./dstack/record-demo.sh
+MODEL_PROVIDER=openai
+MODEL=gpt-5
+OPENAI_API_KEY=...
 ```
 
-This updates the repository's `dstack/dstack-openai-demo.gif` and produces a
-local, Git-ignored `dstack/dstack-openai-demo.cast`, without printing or
-recording the credential. The capture runs the dstack Compose workload
-locally, demonstrates authenticated ingress, restarts both the agent and
-Polign, verifies durable recall, and displays supersession history.
+For Anthropic, set `MODEL_PROVIDER`, `MODEL`, and `ANTHROPIC_API_KEY` instead.
+`OPENAI_BASE_URL` can target an OpenAI-compatible endpoint.
 
-### Record an S3 machine-failover demo
+## Record the S3 machine-failover demo
 
-For a stronger failure scenario, configure `POLIGN_STORE` and the standard AWS
-credential chain in `dstack/.env`, using an existing bucket and a dedicated
-prefix. Then run:
+With `.env` configured, run:
 
 ```sh
-./dstack/record-s3-failover-demo.sh
+./record-demo.sh
 ```
 
-The recorder starts Machine A, writes a typed user profile, kills the agent and
-Polign without a graceful shutdown, and deletes all of Machine A's local
-volumes. It then starts Machine B as a separate Compose project against the
-same S3 prefix. A new OpenAI conversation recalls the profile, updates two
-single-valued facts, and displays their cross-machine supersession history.
+`record-demo.sh` runs the S3 failover scenario. It updates
+`dstack-s3-failover-demo.gif` and writes a Git-ignored
+`dstack-s3-failover-demo.cast`. Neither the bucket URI nor any credential is
+printed or recorded.
 
-This proves durable memory continuity, not transcript persistence: the model's
-message history dies with Machine A. Machine B continues from records recovered
-from S3, which is the behavior this memory architecture is designed to provide.
+The recorder uses two isolated Compose projects against the same S3 prefix.
+Only one machine runs at a time, and it deletes Machine A's local volumes
+before Machine B starts.
 
-The command updates the repository's `dstack/dstack-s3-failover-demo.gif` and
-produces a local, Git-ignored `.cast` file. Neither the AWS credentials nor the
-configured bucket URI are written to the recording.
+## Local smoke test
+
+The smoke test explicitly opts into `fs:/var/lib/polign/store` so it can check
+image startup, private routing, gateway authentication, and the inspector
+without touching AWS or a model API:
+
+```sh
+./smoke-test.sh
+```
+
+That filesystem store is disposable test data. It is not the deployment's
+persistence model and is never selected implicitly by the base Compose file.
 
 ## Publish the application image
 
 The repository workflow publishes multi-architecture images to
-`ghcr.io/polign/polign-memory-demo`. Its job summary prints the immutable
-`image@sha256:...` reference. Use that digest for dstack; do not deploy a
-mutable `latest` or branch tag because the image identity is part of what the
-attested Compose configuration is meant to describe.
+`ghcr.io/polign/polign-memory-demo`. Its job summary prints an immutable
+reference:
 
-Polign itself is not redistributed in this application image. `polign-init`
-downloads the official 0.4.3 Linux release for the CVM architecture and
-checks its pinned SHA-256 digest before the database starts.
+```text
+ghcr.io/polign/polign-memory-demo@sha256:...
+```
+
+Set that value as `MEMORY_DEMO_IMAGE`. Do not deploy `latest` or another mutable
+tag: the image reference is part of the attested Compose configuration.
+
+Polign itself is not redistributed in the application image. `polign-init`
+downloads the official 0.4.3 binary for the CVM architecture and verifies its
+pinned SHA-256 digest before the database starts.
 
 ## Deploy to Phala Cloud
 
-Choose an immutable application image, generate browser credentials, and pass
-the model credential as an encrypted variable:
+After filling in `.env`:
 
 ```sh
-export MEMORY_DEMO_IMAGE='ghcr.io/polign/polign-memory-demo@sha256:<digest>'
-export DSTACK_PASSWORD="$(openssl rand -hex 32)"
-
-phala auth login
-phala deploy -n polign-memory -c docker-compose.yaml \
-  -e MEMORY_DEMO_IMAGE="${MEMORY_DEMO_IMAGE}" \
-  -e DSTACK_USERNAME=polign \
-  -e DSTACK_PASSWORD="${DSTACK_PASSWORD}" \
-  -e ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY}"
+phala login
+phala deploy -n polign-memory -c docker-compose.yaml -e .env --wait \
+  --no-public-logs --no-public-sysinfo
 ```
 
-Open the port-8080 endpoint reported by Phala Cloud. Its TLS gateway protects
-the browser's Basic Auth exchange; never expose this Compose port without TLS.
+The CLI seals the environment variables into the measured workload. The
+deployment fails early if `POLIGN_STORE` is missing; set
+`MEMORY_DEMO_IMAGE` to the immutable GHCR reference before deploying.
 
-To use OpenAI instead:
+Open the port-8080 endpoint reported by Phala Cloud and sign in with
+`DSTACK_USERNAME` and `DSTACK_PASSWORD`. The Phala TLS gateway protects the
+Basic Auth exchange; do not expose this Compose port without TLS.
+
+## Capture the TDX attestation
+
+After the CVM is healthy:
 
 ```sh
-phala deploy -n polign-memory -c docker-compose.yaml \
-  -e MEMORY_DEMO_IMAGE="${MEMORY_DEMO_IMAGE}" \
-  -e DSTACK_USERNAME=polign \
-  -e DSTACK_PASSWORD="${DSTACK_PASSWORD}" \
-  -e MODEL_PROVIDER=openai \
-  -e MODEL=gpt-5 \
-  -e OPENAI_API_KEY="${OPENAI_API_KEY}"
+phala cvms attestation polign-memory --json > attestation.json
 ```
 
-`OPENAI_BASE_URL` can point the same client at an OpenAI-compatible inference
-endpoint. Set it together with that endpoint's token and model name.
+The attestation binds the running CVM to its measured runtime and Compose hash.
+Keep the immutable image reference, Compose file, and attestation JSON together
+as the deployment evidence.
 
 ## Security boundaries
 
-- dstack attests the Compose workload and its image references. Pin the memory
-  application image by digest and verify the deployment's attestation before
+- S3 is the source of truth. The local volumes contain caches and the verified
+  Polign binary; deleting them must not delete acknowledged memory.
+- Pin the application image by digest and verify the TDX attestation before
   sharing sensitive memories.
-- Phala Cloud preserves and encrypts named volumes across restarts and
-  upgrades. Deleting the CVM is not a backup strategy.
+- Keep the source AWS principal limited to `sts:AssumeRole` on the store role,
+  require an external ID, and scope the store role to one bucket prefix.
 - `-trace=false` prevents typed memory tool inputs and results from reaching
-  container logs. Also configure the deployment itself to keep logs private.
-- The model provider still receives the conversation and tool exchange. A TEE
-  protects this application's execution and stored memory; it does not make a
-  third-party model API oblivious to requests sent to it.
-- The browser gateway is a single-user demonstration boundary, not a
-  multi-tenant identity system. Deploy one instance per trust domain.
-- The unauthenticated Polign data plane stays private. Do not publish ports
-  `23000` or `23001`.
+  container logs. The deployment commands also disable public logs and public
+  system information.
+- The model provider receives the conversation and tool exchange. A TEE
+  protects this workload and its stored memory; it does not hide requests from
+  a third-party model API.
+- The gateway is a single-user demonstration boundary, not a multi-tenant
+  identity system. Deploy one instance per trust domain.
+- Never publish Polign ports `23000` or `23001`; its data plane is intentionally
+  reachable only inside the Compose network.
 
 ## Persistence model
 
-Polign runs with `-store fs:/var/lib/polign/store`, so acknowledged writes go
-to its write-ahead log on the persistent volume before returning. Recreating
-the application and database containers retains the same memory state.
+Polign runs with `-store s3://bucket/dedicated-prefix`. Acknowledged writes are
+durable in the S3-backed write log before returning. The disk cache accelerates
+reads and the model cache avoids downloading the public embedding model again,
+but neither is authoritative.
 
-For a multi-CVM production service, replace the filesystem store with a cloud
-object store and use the platform's encrypted variables or workload identity
-for credentials. That is a separate scaling design; this example intentionally
-demonstrates one confidential VM with one durable trust boundary.
+A replacement CVM can start with an empty disk, assume the same store role, and
+recover the collection from S3. The machine-failover recording exercises that
+exact path.
