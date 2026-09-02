@@ -1,6 +1,16 @@
-# polign memory demo
+# polign memory + Wikipedia demo
 
-A terminal agent whose memory is a typed, durable database, not retrieved text.
+A terminal agent with two deliberately separate collections in one durable
+database:
+
+- `memories` is writable typed agent memory. Facts and preferences stated in
+  conversation are stored here and survive agent and server restarts.
+- `wikipedia_bge` is the read-only English Wikipedia passage index. General
+  questions are answered from its returned passages and include source URLs.
+
+The default server store is
+`s3://polign-demo-wiki-en/polign-v4`, so the demo can query the existing
+Wikipedia index while keeping memory records in their own collection.
 
 ![The four-act demo: durable writes, agent restart, server kill -9 and cold restart from the bucket, and a supersession](demo.gif)
 
@@ -54,17 +64,36 @@ export ANTHROPIC_API_KEY=...
 
 Claude models are the default. To use an OpenAI model instead, export
 `OPENAI_API_KEY` and pass the model id, e.g.
-`./run-demo.sh fs:./demo-bucket -model gpt-5`; the provider is inferred from
+`./run-demo.sh -model gpt-5`; the provider is inferred from
 the id. Same store, same tools, same typed
 semantics, because the schema enforcement lives in the database layer, not in
 the prompt or the provider.
 
-That starts a server on a local filesystem bucket (`./demo-bucket`) and opens
-the agent. Pass your own bucket to make the durability real:
-`./run-demo.sh s3://my-bucket/memory-demo`.
+That starts a server against `s3://polign-demo-wiki-en/polign-v4` and opens
+the agent. AWS credentials need read access to the Wikipedia index and write
+access for the `memories` collection. Pass another store explicitly when
+needed: `./run-demo.sh s3://my-bucket/prefix`.
+
+By default Wikipedia questions use the index's lexical search, which needs no
+second model process. For higher-quality BGE semantic retrieval, run the
+`polign_demo/serve/embedserve.py` sidecar with the same
+`BAAI/bge-small-en-v1.5` model used to build `wikipedia_bge`, then pass its
+address:
+
+```sh
+./run-demo.sh -wikipedia-embed http://127.0.0.1:23200
+```
+
+The memory collection continues to use the demo's small local embedder; Polign
+collections can have different dimensions and the two retrieval paths never
+mix records. To run the original memory-only local demo:
+
+```sh
+./run-demo.sh fs:./demo-bucket -wikipedia-collection ""
+```
 
 The first run downloads a small embedding model (one-time, ~43 MB). Every
-memory tool call the agent makes is printed as it happens, so you can watch
+tool call the agent makes is printed as it happens, so you can watch
 the whole path: model, typed tool, validation, database.
 
 ## The script
@@ -175,7 +204,7 @@ captured with `asciinema rec demo.cast -c ./record-demo.sh`. Run
 also replay any single act yourself:
 `./run-demo.sh fs:./demo-bucket -script demo/act1.txt`.
 
-## Recall is two primitives over one store
+## Recall and knowledge search are separate primitives
 
 - **Exact:** `recall(subject, predicate, kind, min_confidence, value_min,
   value_max)` is a filtered query over typed metadata. `confidence` and
@@ -186,6 +215,11 @@ also replay any single act yourself:
 
 Semantic retrieval and durable typed state are different primitives. Here
 they run over one store, in one bucket, with one consistency contract.
+
+General-knowledge questions use a third tool, `search_wikipedia(query, limit)`.
+It always targets `wikipedia_bge` through Polign's cold object-store query path
+and returns `title`, `url`, and `text` for grounding. It has no write operation;
+the remember and forget tools remain bound to `memories` only.
 
 ## Use the pattern in your own agent
 
@@ -232,6 +266,10 @@ asserts it is immediately visible to exact recall — the same order as act 4.
 ```
 -polign      polign_db HTTP address        (default http://127.0.0.1:24100)
 -collection  collection for the memories   (default "memories")
+-wikipedia-collection  read-only knowledge collection (default "wikipedia_bge"; empty disables)
+-wikipedia-embed       optional BGE sidecar; enables semantic search
+-wikipedia-embed-dim   BGE vector width (default 384)
+-wikipedia-nprobe      IVF cells for semantic Wikipedia search (default 8)
 -model       model id                      (default claude-opus-5; gpt-*/o* ids use OpenAI)
 -provider    force "anthropic" or "openai" instead of inferring from -model
 -predicates  registry JSON to use instead of the embedded one

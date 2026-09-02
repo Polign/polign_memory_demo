@@ -26,8 +26,21 @@ type Agent interface {
 	Reset()
 }
 
-func systemPrompt(registry memkit.Registry) string {
-	return `You are a personal assistant with a typed, durable memory store.
+func systemPrompt(registry memkit.Registry, wikipediaEnabled bool) string {
+	wikipediaIdentity := ""
+	wikipediaRules := ""
+	if wikipediaEnabled {
+		wikipediaIdentity = " and a separate, read-only English Wikipedia knowledge index"
+		wikipediaRules = `- For general-knowledge questions, call search_wikipedia before answering and
+  ground the answer in the returned passages. Include the relevant Wikipedia
+  article URL(s) in the answer. If the passages do not support an answer, say
+  so instead of filling the gap from model knowledge.
+- Personal memory and Wikipedia are separate sources: never use Wikipedia to
+  answer a question about the user's stored facts, and never write Wikipedia
+  passages into memory.
+`
+	}
+	return `You are a personal assistant with a typed, durable memory store` + wikipediaIdentity + `.
 
 Memory is not text you paste into your context. It is a database of typed
 records, each one: kind (fact or preference), subject, predicate, value,
@@ -59,6 +72,7 @@ Rules:
 - One recall per question: pick the right filters (include_history only when
   the user asks about the past) instead of repeating the query with
   different flags.
+` + wikipediaRules + `
 - Use forget only when the user explicitly asks you to forget something.
 - Do not store trivia from the conversation flow, only durable statements.
 - Keep replies short and conversational.`
@@ -74,7 +88,7 @@ type toolSpec struct {
 	Required    []string
 }
 
-func toolSpecs() []toolSpec {
+func toolSpecs(wikipediaEnabled bool) []toolSpec {
 	rememberProps := map[string]any{
 		"subject":   map[string]any{"type": "string", "description": "Who or what this is about, lowercase. Always \"user\" for the person you are talking to."},
 		"predicate": map[string]any{"type": "string", "description": "A registered snake_case predicate (e.g. \"prefers_editor\")"},
@@ -89,7 +103,7 @@ func toolSpecs() []toolSpec {
 	}
 	rememberRequired := []string{"subject", "predicate", "value"}
 
-	return []toolSpec{
+	specs := []toolSpec{
 		{
 			Name:        "remember_fact",
 			Description: "Store one durable fact as a typed record. Single-valued predicates supersede any previous value; the result reports what was replaced.",
@@ -127,13 +141,26 @@ func toolSpecs() []toolSpec {
 			Required: []string{"subject", "predicate"},
 		},
 	}
+	if wikipediaEnabled {
+		specs = append(specs, toolSpec{
+			Name:        "search_wikipedia",
+			Description: "Search the separate read-only English Wikipedia passage index. Use this before answering general-knowledge questions; cite URLs from the results.",
+			Properties: map[string]any{
+				"query": map[string]any{"type": "string", "description": "A focused search query for the factual question"},
+				"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 10, "description": "Number of passages; default 5"},
+			},
+			Required: []string{"query"},
+		})
+	}
+	return specs
 }
 
 // toolbox runs tool calls against the store and prints the trace both agents
 // share.
 type toolbox struct {
-	store *memkit.Store
-	trace bool
+	store     *memkit.Store
+	wikipedia wikipediaSource
+	trace     bool
 }
 
 // run executes one tool call, printing it and its result. Errors return as
@@ -223,6 +250,23 @@ func (tb *toolbox) dispatch(name string, input []byte) (string, bool) {
 			return fail(err)
 		}
 		return ok(map[string]any{"deleted": n})
+
+	case "search_wikipedia":
+		if tb.wikipedia == nil {
+			return fail(fmt.Errorf("wikipedia search is not configured"))
+		}
+		var in struct {
+			Query string `json:"query"`
+			Limit int    `json:"limit"`
+		}
+		if err := json.Unmarshal(input, &in); err != nil {
+			return fail(err)
+		}
+		results, err := tb.wikipedia.Search(in.Query, in.Limit)
+		if err != nil {
+			return fail(err)
+		}
+		return ok(map[string]any{"count": len(results), "passages": results})
 
 	default:
 		return fail(fmt.Errorf("unknown tool %q", name))

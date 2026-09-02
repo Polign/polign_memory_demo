@@ -6,6 +6,9 @@ dstack/.env
 # macOS Finder metadata
 .DS_Store
 
+# Editor swap files
+*.swp
+
 # demo files
 demo-agent
 demo.cast

@@ -20,6 +20,10 @@ import (
 func main() {
 	polignURL := flag.String("polign", "http://127.0.0.1:24100", "polign_db server HTTP address")
 	collection := flag.String("collection", "memories", "collection the memories live in (one per agent identity)")
+	wikipediaCollection := flag.String("wikipedia-collection", "wikipedia_bge", "read-only Wikipedia collection (empty disables Wikipedia answers)")
+	wikipediaEmbed := flag.String("wikipedia-embed", "", "optional BGE query-embedding sidecar address; enables semantic search (empty uses lexical search)")
+	wikipediaEmbedDim := flag.Int("wikipedia-embed-dim", 384, "vector width returned by the Wikipedia BGE sidecar")
+	wikipediaNProbe := flag.Int("wikipedia-nprobe", 8, "IVF cells probed by semantic Wikipedia queries")
 	model := flag.String("model", "claude-opus-5", "model id; a claude-* id uses the Anthropic API, a gpt-*/o* id uses the OpenAI API (see also -provider)")
 	provider := flag.String("provider", "", "force \"anthropic\" or \"openai\" instead of inferring from -model")
 	dataDir := flag.String("data-dir", "", "embedding model directory (default: user cache dir)")
@@ -28,10 +32,10 @@ func main() {
 	scriptPath := flag.String("script", "", "replay user lines from this file instead of reading stdin, then exit")
 	inspectAddr := flag.String("inspect", "", "serve a read-only inspector page at this address (e.g. 127.0.0.1:24102)")
 	webAddr := flag.String("web", "", "serve the chat UI and memory inspector at this address instead of using the terminal (e.g. :8080)")
-	traceTools := flag.Bool("trace", true, "print memory tool inputs and results; disable when deployment logs are public")
+	traceTools := flag.Bool("trace", true, "print tool inputs and results; disable when deployment logs are public")
 	flag.Parse()
 
-	if err := run(*polignURL, *collection, *model, *provider, *dataDir, *dataURL, *predicatesPath, *scriptPath, *inspectAddr, *webAddr, *traceTools); err != nil {
+	if err := run(*polignURL, *collection, *wikipediaCollection, *wikipediaEmbed, *wikipediaEmbedDim, *wikipediaNProbe, *model, *provider, *dataDir, *dataURL, *predicatesPath, *scriptPath, *inspectAddr, *webAddr, *traceTools); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
@@ -47,8 +51,16 @@ func inferProvider(model string) string {
 	return "anthropic"
 }
 
-func run(polignURL, collection, model, provider, dataDir, dataURL, predicatesPath, scriptPath, inspectAddr, webAddr string, traceTools bool) error {
+func run(polignURL, collection, wikipediaCollection, wikipediaEmbed string, wikipediaEmbedDim, wikipediaNProbe int, model, provider, dataDir, dataURL, predicatesPath, scriptPath, inspectAddr, webAddr string, traceTools bool) error {
 	logf := func(format string, args ...any) { fmt.Printf(dim+format+reset+"\n", args...) }
+	collection = strings.TrimSpace(collection)
+	wikipediaCollection = strings.TrimSpace(wikipediaCollection)
+	if collection == "" {
+		return fmt.Errorf("memory collection must not be empty")
+	}
+	if wikipediaCollection != "" && wikipediaCollection == collection {
+		return fmt.Errorf("memory collection and Wikipedia collection must be different (both are %q)", collection)
+	}
 
 	raw := defaultPredicates
 	if predicatesPath != "" {
@@ -83,6 +95,10 @@ func run(polignURL, collection, model, provider, dataDir, dataURL, predicatesPat
 	}
 
 	store := memkit.NewStore(db, collection, registry, embedder.Embed)
+	var wikipedia wikipediaSource
+	if wikipediaCollection != "" {
+		wikipedia = newWikipediaSearch(db, wikipediaCollection, wikipediaEmbed, wikipediaEmbedDim, wikipediaNProbe)
+	}
 
 	if inspectAddr != "" {
 		if err := startInspector(inspectAddr, store, collection); err != nil {
@@ -112,17 +128,25 @@ func run(polignURL, collection, model, provider, dataDir, dataURL, predicatesPat
 		if os.Getenv("ANTHROPIC_API_KEY") == "" {
 			logf("ANTHROPIC_API_KEY is not set; using whatever credentials the Anthropic SDK resolves (e.g. ant auth login)")
 		}
-		agent = newAnthropicAgent(model, store, traceTools)
+		agent = newAnthropicAgent(model, store, wikipedia, traceTools)
 	case "openai":
 		if os.Getenv("OPENAI_API_KEY") == "" {
 			logf("OPENAI_API_KEY is not set; the OpenAI SDK will fail without it")
 		}
-		agent = newOpenAIAgent(model, store, traceTools)
+		agent = newOpenAIAgent(model, store, wikipedia, traceTools)
 	default:
 		return fmt.Errorf("unknown provider %q (want anthropic or openai)", provider)
 	}
 
-	fmt.Printf("polign memory demo: %s (%s) against %s (collection %q)\n", model, provider, polignURL, collection)
+	fmt.Printf("polign memory demo: %s (%s) against %s (memory %q", model, provider, polignURL, collection)
+	if wikipediaCollection != "" {
+		mode := "lexical"
+		if wikipediaEmbed != "" {
+			mode = "semantic BGE"
+		}
+		fmt.Printf(", Wikipedia %q, %s", wikipediaCollection, mode)
+	}
+	fmt.Println(")")
 	if webAddr != "" {
 		fmt.Printf("web UI: http://%s\n", webAddr)
 		return serveWeb(webAddr, webHandler(agent, labelForProvider(provider), store, collection, db.Healthy))

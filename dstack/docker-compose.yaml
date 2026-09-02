@@ -107,6 +107,10 @@ services:
       - ${MODEL_PROVIDER:-anthropic}
       - -collection
       - ${POLIGN_COLLECTION:-memories}
+      - -wikipedia-collection
+      - ${WIKIPEDIA_COLLECTION:-wikipedia_bge}
+      - -wikipedia-embed
+      - ${WIKIPEDIA_EMBED_ADDR:-}
       - -trace=${TRACE_TOOLS:-false}
     environment:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
