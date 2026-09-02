@@ -1,18 +1,22 @@
 #!/usr/bin/env sh
-# Starts a polign_db server on a local filesystem bucket and runs the memory
-# agent against it. The first argument is the store; anything after it goes to
-# the agent:
+# Starts a polign_db server on the configured object store and runs the memory
+# agent against it. An optional first store URI overrides the default; remaining
+# arguments go to the agent:
 #
-#   ./run-demo.sh                                    # fs:./demo-bucket, Claude
-#   ./run-demo.sh s3://my-bucket/demo                # your own S3 bucket
+#   ./run-demo.sh                                    # hosted English Wikipedia bucket
+#   ./run-demo.sh fs:./demo-bucket -wikipedia-collection "" # memory-only, local
 #   ./run-demo.sh fs:./demo-bucket -model gpt-5      # OpenAI model
 set -eu
 
-STORE="${1:-fs:$PWD/demo-bucket}"
-[ "$#" -ge 1 ] && shift
+STORE="s3://polign-demo-wiki-en/polign-v4"
+case "${1:-}" in
+  s3://*|gcs://*|az://*|fs:*) STORE="$1"; shift ;;
+esac
 HTTP_ADDR="127.0.0.1:24100"
 GRPC_ADDR="127.0.0.1:24101"
 SERVER="${POLIGN_SERVER:-polign-server}"
+AWS_REGION="${AWS_REGION:-us-east-1}"
+export AWS_REGION
 
 if ! command -v "$SERVER" >/dev/null 2>&1; then
   echo "polign-server not found. Install it with:"

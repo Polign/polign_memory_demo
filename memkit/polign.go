@@ -42,6 +42,17 @@ type Hit struct {
 	Metadata map[string]any `json:"metadata"`
 }
 
+// QueryOptions describes a general collection query. Memory recall uses
+// Search below; read-only knowledge collections can additionally opt into the
+// object-store path and the collection's lexical index.
+type QueryOptions struct {
+	Values []float32
+	Text   string
+	K      int
+	Cold   bool
+	NProbe int
+}
+
 // Put upserts one vector. The collection is created on first use.
 func (c *PolignClient) Put(collection, id string, values []float32, metadata map[string]any) error {
 	body := map[string]any{"values": values}
@@ -101,6 +112,37 @@ func (c *PolignClient) Search(collection string, values []float32, k int, filter
 	body := map[string]any{"values": values, "k": k, "typed_metadata": true}
 	if len(filter) > 0 {
 		body["filter"] = filter
+	}
+	path := fmt.Sprintf("/v1/collections/%s/query", seg(collection))
+	raw, err := c.request(http.MethodPost, path, body)
+	if err != nil {
+		return nil, err
+	}
+	var out struct {
+		Hits []Hit `json:"hits"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("polign: parse query response: %w", err)
+	}
+	return out.Hits, nil
+}
+
+// Query runs a vector, lexical, or hybrid query. It is intentionally separate
+// from Search so the typed memory store cannot accidentally broaden its
+// filtered recall into an unrelated knowledge collection.
+func (c *PolignClient) Query(collection string, opts QueryOptions) ([]Hit, error) {
+	body := map[string]any{"k": opts.K}
+	if len(opts.Values) > 0 {
+		body["values"] = opts.Values
+	}
+	if opts.Text != "" {
+		body["text"] = opts.Text
+	}
+	if opts.Cold {
+		body["cold"] = true
+	}
+	if opts.NProbe > 0 {
+		body["nprobe"] = opts.NProbe
 	}
 	path := fmt.Sprintf("/v1/collections/%s/query", seg(collection))
 	raw, err := c.request(http.MethodPost, path, body)

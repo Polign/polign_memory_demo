@@ -20,8 +20,8 @@ type anthropicAgent struct {
 	messages []anthropic.MessageParam
 }
 
-func newAnthropicAgent(model string, store *memkit.Store, trace bool) *anthropicAgent {
-	specs := toolSpecs()
+func newAnthropicAgent(model string, store *memkit.Store, wikipedia wikipediaSource, trace bool) *anthropicAgent {
+	specs := toolSpecs(wikipedia != nil)
 	defs := make([]anthropic.ToolParam, len(specs))
 	tools := make([]anthropic.ToolUnionParam, len(specs))
 	for i, spec := range specs {
@@ -35,8 +35,8 @@ func newAnthropicAgent(model string, store *memkit.Store, trace bool) *anthropic
 	return &anthropicAgent{
 		client: anthropic.NewClient(),
 		model:  model,
-		tb:     &toolbox{store: store, trace: trace},
-		system: systemPrompt(store.Registry()),
+		tb:     &toolbox{store: store, wikipedia: wikipedia, trace: trace},
+		system: systemPrompt(store.Registry(), wikipedia != nil),
 		tools:  tools,
 	}
 }
