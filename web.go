@@ -30,6 +30,7 @@ const webHTML = `<!doctype html>
   #chat { min-height: 22rem; border: 1px solid #30363d; border-radius: .6rem; padding: 1rem; overflow-wrap: anywhere; }
   .message { margin: 0 0 1rem; white-space: pre-wrap; }
   .message b { color: #8b949e; display: block; font-size: .8rem; text-transform: uppercase; }
+  .provenance { display: block; width: fit-content; margin-top: .45rem; padding: .12rem .5rem; border: 1px solid #2f6f44; border-radius: 999px; color: #7ee787; background: #12261a; font-size: .75rem; }
   form { display: flex; gap: .5rem; margin-top: 1rem; }
   input { flex: 1; min-width: 0; background: #161b22; color: inherit; border: 1px solid #30363d; border-radius: .4rem; padding: .75rem; }
   button { background: #238636; color: white; border: 0; border-radius: .4rem; padding: .75rem 1rem; cursor: pointer; }
@@ -59,12 +60,18 @@ const webJS = `(() => {
   const reset = document.querySelector('#reset');
   const status = document.querySelector('#status');
 
-  function add(role, text) {
+  function add(role, text, retrievedFrom = []) {
     const row = document.createElement('div');
     row.className = 'message';
     const label = document.createElement('b');
     label.textContent = role;
     row.append(label, document.createTextNode(text));
+    for (const source of retrievedFrom) {
+      const provenance = document.createElement('span');
+      provenance.className = 'provenance';
+      provenance.textContent = 'Retrieved from ' + source;
+      row.append(provenance);
+    }
     chat.append(row);
     row.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }
@@ -85,7 +92,7 @@ const webJS = `(() => {
       });
       const body = await response.json();
       if (!response.ok) throw new Error(body.error || 'request failed');
-      add(body.label, body.reply);
+      add(body.label, body.reply, body.retrieved_from || []);
       status.textContent = '';
     } catch (error) {
       status.textContent = error.message;
@@ -194,7 +201,11 @@ func (app *webApp) chat(w http.ResponseWriter, r *http.Request) {
 		writeWebJSON(w, http.StatusBadGateway, map[string]string{"error": "model request failed"})
 		return
 	}
-	writeWebJSON(w, http.StatusOK, map[string]string{"label": app.label, "reply": reply})
+	writeWebJSON(w, http.StatusOK, struct {
+		Label         string   `json:"label"`
+		Reply         string   `json:"reply"`
+		RetrievedFrom []string `json:"retrieved_from"`
+	}{Label: app.label, Reply: reply.Text, RetrievedFrom: reply.RetrievedFrom})
 }
 
 func (app *webApp) reset(w http.ResponseWriter, r *http.Request) {

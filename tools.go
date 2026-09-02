@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 
 	"github.com/Polign/polign_memory_demo/memkit"
 )
@@ -21,9 +22,26 @@ const (
 type Agent interface {
 	// Turn sends one user message and drives the tool loop until the model
 	// produces a final reply.
-	Turn(ctx context.Context, userText string) (string, error)
+	Turn(ctx context.Context, userText string) (AgentReply, error)
 	// Reset clears the conversation. The memory store is untouched.
 	Reset()
+}
+
+// AgentReply keeps retrieval provenance separate from model-written text. The
+// UI can therefore show a source tag only when the corresponding tool really
+// succeeded during this turn.
+type AgentReply struct {
+	Text          string
+	RetrievedFrom []string
+}
+
+func mapKeys(values map[string]bool) []string {
+	out := make([]string, 0, len(values))
+	for value := range values {
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func systemPrompt(registry memkit.Registry, wikipediaEnabled bool) string {
@@ -147,12 +165,19 @@ func toolSpecs(wikipediaEnabled bool) []toolSpec {
 			Description: "Search the separate read-only English Wikipedia passage index. Use this before answering general-knowledge questions; cite URLs from the results.",
 			Properties: map[string]any{
 				"query": map[string]any{"type": "string", "description": "A focused search query for the factual question"},
-				"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 10, "description": "Number of passages; default 5"},
+				"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 3, "description": "Number of passages; default 3"},
 			},
 			Required: []string{"query"},
 		})
 	}
 	return specs
+}
+
+func (tb *toolbox) retrievalSource(toolName string, isErr bool) string {
+	if isErr || toolName != "search_wikipedia" || tb.wikipedia == nil {
+		return ""
+	}
+	return tb.wikipedia.Collection()
 }
 
 // toolbox runs tool calls against the store and prints the trace both agents

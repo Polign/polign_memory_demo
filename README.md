@@ -220,6 +220,9 @@ General-knowledge questions use a third tool, `search_wikipedia(query, limit)`.
 It always targets `wikipedia_bge` through Polign's cold object-store query path
 and returns `title`, `url`, and `text` for grounding. It has no write operation;
 the remember and forget tools remain bound to `memories` only.
+After a successful search, the reply is labeled `Retrieved from wikipedia_bge`
+in both the web UI and terminal. The label comes from the completed tool call,
+not from model-written text, so memory-only answers do not receive it.
 
 ## Use the pattern in your own agent
 
