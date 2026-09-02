@@ -80,6 +80,8 @@ type stubWikipedia struct {
 	limit int
 }
 
+func (s *stubWikipedia) Collection() string { return "wikipedia_bge" }
+
 func (s *stubWikipedia) Search(query string, limit int) ([]WikipediaResult, error) {
 	s.query, s.limit = query, limit
 	return []WikipediaResult{{Title: "Go", URL: "https://en.wikipedia.org/wiki/Go_(programming_language)", Text: "Go is a programming language."}}, nil
@@ -97,6 +99,42 @@ func TestWikipediaToolDispatchDoesNotUseMemoryRecall(t *testing.T) {
 	}
 	if !strings.Contains(result, "en.wikipedia.org") || !strings.Contains(result, `"passages"`) {
 		t.Fatalf("tool result = %s", result)
+	}
+}
+
+func TestWikipediaSearchDefaultsToThreePassages(t *testing.T) {
+	var body map[string]any
+	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		_, _ = w.Write([]byte(`{"hits":[]}`))
+	}))
+	defer node.Close()
+
+	wiki := newWikipediaSearch(memkit.NewPolignClient(node.URL), "wikipedia_bge", "", 384, 8)
+	if _, err := wiki.Search("default limit", 0); err != nil {
+		t.Fatal(err)
+	}
+	if body["k"] != float64(3) {
+		t.Fatalf("default k = %#v, want 3", body["k"])
+	}
+	if _, err := wiki.Search("capped limit", 10); err != nil {
+		t.Fatal(err)
+	}
+	if body["k"] != float64(3) {
+		t.Fatalf("capped k = %#v, want 3", body["k"])
+	}
+}
+
+func TestWikipediaRetrievalSourceRequiresSuccessfulToolCall(t *testing.T) {
+	tb := &toolbox{wikipedia: &stubWikipedia{}}
+	if got := tb.retrievalSource("search_wikipedia", false); got != "wikipedia_bge" {
+		t.Fatalf("source = %q", got)
+	}
+	if got := tb.retrievalSource("search_wikipedia", true); got != "" {
+		t.Fatalf("failed search source = %q, want empty", got)
+	}
+	if got := tb.retrievalSource("recall", false); got != "" {
+		t.Fatalf("recall source = %q, want empty", got)
 	}
 }
 

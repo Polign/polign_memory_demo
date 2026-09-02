@@ -46,35 +46,47 @@ func newOpenAIAgent(model string, store *memkit.Store, wikipedia wikipediaSource
 
 func (a *openaiAgent) Reset() { a.messages = nil }
 
-func (a *openaiAgent) Turn(ctx context.Context, userText string) (string, error) {
+func (a *openaiAgent) Turn(ctx context.Context, userText string) (AgentReply, error) {
 	a.messages = append(a.messages, openai.UserMessage(userText))
+	retrievedFrom := make(map[string]bool)
 
 	for {
 		history := make([]openai.ChatCompletionMessageParamUnion, 0, len(a.messages)+1)
 		history = append(history, openai.SystemMessage(a.system))
 		history = append(history, a.messages...)
 
-		resp, err := a.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
-			Model:    shared.ChatModel(a.model),
-			Messages: history,
-			Tools:    a.tools,
-		})
+		params := openai.ChatCompletionNewParams{
+			Model:               shared.ChatModel(a.model),
+			Messages:            history,
+			Tools:               a.tools,
+			MaxCompletionTokens: openai.Int(2048),
+		}
+		// GPT-5 supports minimal reasoning and low verbosity. Both reduce work
+		// on this latency-sensitive, tool-oriented demo without changing models.
+		if a.model == "gpt-5" {
+			params.ReasoningEffort = shared.ReasoningEffortMinimal
+			params.Verbosity = openai.ChatCompletionNewParamsVerbosityLow
+		}
+		resp, err := a.client.Chat.Completions.New(ctx, params)
 		if err != nil {
 			// Drop the failed turn from history so the conversation can continue.
 			a.messages = a.messages[:len(a.messages)-1]
-			return "", err
+			return AgentReply{}, err
 		}
 		if len(resp.Choices) == 0 {
-			return "", fmt.Errorf("openai returned no choices")
+			return AgentReply{}, fmt.Errorf("openai returned no choices")
 		}
 		msg := resp.Choices[0].Message
 		a.messages = append(a.messages, msg.ToParam())
 
 		if len(msg.ToolCalls) == 0 {
-			return msg.Content, nil
+			return AgentReply{Text: msg.Content, RetrievedFrom: mapKeys(retrievedFrom)}, nil
 		}
 		for _, tc := range msg.ToolCalls {
 			result, isErr := a.tb.run(tc.Function.Name, []byte(tc.Function.Arguments))
+			if source := a.tb.retrievalSource(tc.Function.Name, isErr); source != "" {
+				retrievedFrom[source] = true
+			}
 			if isErr {
 				// Chat Completions has no error flag on tool results; the
 				// prefix is the convention the model reads.

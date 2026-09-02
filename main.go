@@ -202,7 +202,10 @@ func repl(agent Agent, label string, next func() (string, bool)) error {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			continue
 		}
-		fmt.Printf("\n%s> %s\n", label, reply)
+		fmt.Printf("\n%s> %s\n", label, reply.Text)
+		for _, source := range reply.RetrievedFrom {
+			fmt.Printf("%sRetrieved from %s%s\n", dim, source, reset)
+		}
 	}
 }
 

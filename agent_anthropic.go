@@ -43,8 +43,9 @@ func newAnthropicAgent(model string, store *memkit.Store, wikipedia wikipediaSou
 
 func (a *anthropicAgent) Reset() { a.messages = nil }
 
-func (a *anthropicAgent) Turn(ctx context.Context, userText string) (string, error) {
+func (a *anthropicAgent) Turn(ctx context.Context, userText string) (AgentReply, error) {
 	a.messages = append(a.messages, anthropic.NewUserMessage(anthropic.NewTextBlock(userText)))
+	retrievedFrom := make(map[string]bool)
 
 	for {
 		resp, err := a.client.Messages.New(ctx, anthropic.MessageNewParams{
@@ -57,7 +58,7 @@ func (a *anthropicAgent) Turn(ctx context.Context, userText string) (string, err
 		if err != nil {
 			// Drop the failed turn from history so the conversation can continue.
 			a.messages = a.messages[:len(a.messages)-1]
-			return "", err
+			return AgentReply{}, err
 		}
 		a.messages = append(a.messages, resp.ToParam())
 
@@ -69,15 +70,18 @@ func (a *anthropicAgent) Turn(ctx context.Context, userText string) (string, err
 				replies = append(replies, v.Text)
 			case anthropic.ToolUseBlock:
 				result, isErr := a.tb.run(v.Name, []byte(v.JSON.Input.Raw()))
+				if source := a.tb.retrievalSource(v.Name, isErr); source != "" {
+					retrievedFrom[source] = true
+				}
 				results = append(results, anthropic.NewToolResultBlock(v.ID, result, isErr))
 			}
 		}
 
 		if resp.StopReason == anthropic.StopReasonRefusal {
-			return "", fmt.Errorf("the model declined this request (%s)", resp.StopDetails.Category)
+			return AgentReply{}, fmt.Errorf("the model declined this request (%s)", resp.StopDetails.Category)
 		}
 		if resp.StopReason != anthropic.StopReasonToolUse {
-			return strings.Join(replies, "\n"), nil
+			return AgentReply{Text: strings.Join(replies, "\n"), RetrievedFrom: mapKeys(retrievedFrom)}, nil
 		}
 		a.messages = append(a.messages, anthropic.NewUserMessage(results...))
 	}

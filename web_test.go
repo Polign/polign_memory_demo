@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -14,9 +15,9 @@ type webStubAgent struct {
 	resets int
 }
 
-func (a *webStubAgent) Turn(_ context.Context, text string) (string, error) {
+func (a *webStubAgent) Turn(_ context.Context, text string) (AgentReply, error) {
 	a.turns = append(a.turns, text)
-	return "remembered: " + text, nil
+	return AgentReply{Text: "remembered: " + text, RetrievedFrom: []string{"wikipedia_bge"}}, nil
 }
 
 func (a *webStubAgent) Reset() { a.resets++ }
@@ -30,11 +31,15 @@ func TestWebChatAndReset(t *testing.T) {
 	if chat.Code != http.StatusOK {
 		t.Fatalf("chat status = %d, want 200: %s", chat.Code, chat.Body.String())
 	}
-	var response map[string]string
+	var response struct {
+		Label         string   `json:"label"`
+		Reply         string   `json:"reply"`
+		RetrievedFrom []string `json:"retrieved_from"`
+	}
 	if err := json.Unmarshal(chat.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	if response["reply"] != "remembered: I use Vim" || response["label"] != "test-agent" {
+	if response.Reply != "remembered: I use Vim" || response.Label != "test-agent" || !reflect.DeepEqual(response.RetrievedFrom, []string{"wikipedia_bge"}) {
 		t.Fatalf("chat response = %#v", response)
 	}
 
@@ -89,7 +94,7 @@ func TestWebRejectsCrossOriginMutation(t *testing.T) {
 
 func TestWebServesUIAndInspector(t *testing.T) {
 	handler := webHandler(&webStubAgent{}, "test", inspectorFake(t), "memories", nil)
-	for path, want := range map[string]string{"/": "Polign memory demo", "/app.js": "api/chat", "/memories/": "3 records"} {
+	for path, want := range map[string]string{"/": "Polign memory demo", "/app.js": "Retrieved from", "/memories/": "3 records"} {
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
 		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), want) {

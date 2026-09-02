@@ -22,6 +22,7 @@ type WikipediaResult struct {
 }
 
 type wikipediaSource interface {
+	Collection() string
 	Search(query string, limit int) ([]WikipediaResult, error)
 }
 
@@ -43,13 +44,15 @@ func newWikipediaSearch(db *memkit.PolignClient, collection, embedAddr string, e
 	return &wikipediaSearch{db: db, collection: collection, embedder: embedder, nprobe: nprobe}
 }
 
+func (w *wikipediaSearch) Collection() string { return w.collection }
+
 func (w *wikipediaSearch) Search(query string, limit int) ([]WikipediaResult, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return nil, fmt.Errorf("wikipedia query must not be empty")
 	}
-	if limit <= 0 || limit > 10 {
-		limit = 5
+	if limit <= 0 || limit > 3 {
+		limit = 3
 	}
 	opts := memkit.QueryOptions{K: limit, Cold: true}
 	if w.embedder != nil {

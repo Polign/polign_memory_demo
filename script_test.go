@@ -14,9 +14,9 @@ type stubAgent struct {
 	resets int
 }
 
-func (a *stubAgent) Turn(_ context.Context, text string) (string, error) {
+func (a *stubAgent) Turn(_ context.Context, text string) (AgentReply, error) {
 	a.turns = append(a.turns, text)
-	return "ok", nil
+	return AgentReply{Text: "ok"}, nil
 }
 
 func (a *stubAgent) Reset() { a.resets++ }
