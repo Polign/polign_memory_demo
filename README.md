@@ -104,7 +104,8 @@ implementation. The current inspector labels rows `active`, `historical`, or
 
 ## Add Wikipedia search
 
-The default `run-demo.sh` store is `s3://polign-demo-wiki-en/polign-v4`, containing
+The default `run-demo.sh` store is `s3://polign-demo-wiki-en-uw1/polign-v4` in
+`us-west-1`, containing
 the `wikipedia_bge` passage index:
 
 ```sh

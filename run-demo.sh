@@ -8,14 +8,14 @@
 #   ./run-demo.sh fs:./demo-bucket -model gpt-5      # OpenAI model
 set -eu
 
-STORE="s3://polign-demo-wiki-en/polign-v4"
+STORE="s3://polign-demo-wiki-en-uw1/polign-v4"
 case "${1:-}" in
   s3://*|gcs://*|az://*|fs:*) STORE="$1"; shift ;;
 esac
 HTTP_ADDR="127.0.0.1:24100"
 GRPC_ADDR="127.0.0.1:24101"
 SERVER="${POLIGN_SERVER:-polign-server}"
-AWS_REGION="${AWS_REGION:-us-east-1}"
+AWS_REGION="${AWS_REGION:-us-west-1}"
 export AWS_REGION
 
 if ! command -v "$SERVER" >/dev/null 2>&1; then
