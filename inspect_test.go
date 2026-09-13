@@ -1,6 +1,8 @@
 package main
 
 import (
+	"github.com/Polign/recall"
+	recallpolign "github.com/Polign/recall/polign"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,11 +15,7 @@ import (
 // vim (superseded) replaced by neovim (active).
 func inspectorFake(t *testing.T) *memkit.Store {
 	t.Helper()
-	vectors := `{"vectors":[
-		{"id":"m-old000000000","values":[1],"metadata":{"kind":"preference","subject":"user","predicate":"prefers_editor","value":"vim","confidence":1,"source":"user_stated","status":"superseded","superseded_by":"m-new000000000","observed_at":"2026-08-23T10:00:00Z"}},
-		{"id":"m-new000000000","values":[1],"metadata":{"kind":"preference","subject":"user","predicate":"prefers_editor","value":"neovim","confidence":1,"source":"user_stated","status":"active","superseded_by":"","observed_at":"2026-08-23T11:00:00Z"}},
-		{"id":"m-goal00000000","values":[1],"metadata":{"kind":"fact","subject":"user","predicate":"daily_step_goal","value":9000,"confidence":1,"source":"user_stated","status":"active","superseded_by":"","observed_at":"2026-08-23T10:30:00Z"}}
-	],"total":3}`
+	vectors := `{"vectors":[{"id":"m-goal00000000","values":[1],"metadata":{"kind":"fact","subject":"user","predicate":"daily_step_goal","value":9000,"confidence":1,"source":"user_stated","observed_at":"2026-08-23T10:30:00Z"}},{"id":"m-new000000000","values":[1],"metadata":{"kind":"preference","subject":"user","predicate":"prefers_editor","value":"neovim","confidence":1,"source":"user_stated","observed_at":"2026-08-23T11:00:00Z"}},{"id":"m-old000000000","values":[1],"metadata":{"kind":"preference","subject":"user","predicate":"prefers_editor","value":"vim","confidence":1,"source":"user_stated","observed_at":"2026-08-23T10:00:00Z"}}],"total":3}`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || !strings.Contains(r.URL.Path, "/vectors") {
 			http.Error(w, `{"error":"unexpected route"}`, http.StatusNotFound)
@@ -32,8 +30,15 @@ func inspectorFake(t *testing.T) *memkit.Store {
 	if err != nil {
 		t.Fatal(err)
 	}
-	embed := func(string) []float32 { return []float32{1} }
-	return memkit.NewStore(memkit.NewPolignClient(srv.URL), "memories", registry, embed)
+	backend, err := recallpolign.New(recallpolign.Config{BaseURL: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := memkit.NewStore(backend, "memories", registry, recall.LexicalEmbedder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store
 }
 
 func TestInspectorRendersSupersession(t *testing.T) {
@@ -47,8 +52,7 @@ func TestInspectorRendersSupersession(t *testing.T) {
 	body := rec.Body.String()
 	for _, want := range []string{
 		"vim", "neovim", "9000",
-		`class="superseded"`,
-		`href="#m-new000000000"`,
+		`class="historical"`,
 		`id="m-new000000000"`,
 		"3 records",
 	} {

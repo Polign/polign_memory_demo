@@ -158,7 +158,7 @@ Set that value as `MEMORY_DEMO_IMAGE`. Do not deploy `latest` or another mutable
 tag: the image reference is part of the attested Compose configuration.
 
 Polign itself is not redistributed in the application image. `polign-init`
-downloads the official 0.4.3 binary for the CVM architecture and verifies its
+downloads the official 0.6.5 binary for the CVM architecture and verifies its
 pinned SHA-256 digest before the database starts.
 
 ## Deploy to Phala Cloud
@@ -220,3 +220,17 @@ but neither is authoritative.
 A replacement CVM can start with an empty disk, assume the same store role, and
 recover the collection from S3. The machine-failover recording exercises that
 exact path.
+
+## Recall memory
+
+The demo uses Recall v0.4.0 for typed memory and Polign v0.6.5 for durable
+storage. The default memory collection is `recall_demo_lexical_v1`; Wikipedia
+continues to use its own read-only collection. Memory retrieval uses Recall's
+built-in lexical embedder, so startup does not download a model.
+
+Older `memories` collections contain mutable memkit records. They are left
+untouched and are not automatically migrated. Remove a previous
+`POLIGN_COLLECTION=memories` override or choose a fresh Recall collection before
+starting this version. The inspector now shows historical assertions and
+withdrawals; forgetting preserves the event history. Existing recordings show
+the older implementation.

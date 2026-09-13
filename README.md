@@ -1,287 +1,167 @@
-# polign memory + Wikipedia demo
+# Recall memory + Wikipedia demo
 
-A terminal agent with two deliberately separate collections in one durable
-database:
+An agent that remembers preferences and project facts, accepts corrections, and
+can show what it knew before. It uses [Recall](https://github.com/Polign/recall)
+for typed memory and [Polign](https://polign.com) for storage. Both the Anthropic
+and OpenAI conversation loops use the same Recall client.
 
-- `memories` is writable typed agent memory. Facts and preferences stated in
-  conversation are stored here and survive agent and server restarts.
-- `wikipedia_bge` is the read-only English Wikipedia passage index. General
-  questions are answered from its returned passages and include source URLs.
+Try telling it **“I use Vim”**, then **“I switched to Neovim.”** Start a new
+session and ask which editor you use. Ask for the history to see both statements.
 
-The default server store is
-`s3://polign-demo-wiki-en/polign-v4`, so the demo can query the existing
-Wikipedia index while keeping memory records in their own collection.
+The terminal prints each tool call and its result. A browser interface includes
+a memory inspector, so you can see current beliefs, earlier assertions, and
+withdrawals as you talk.
 
-![The four-act demo: durable writes, agent restart, server kill -9 and cold restart from the bucket, and a supersession](demo.gif)
+## Run locally
 
-Most "AI memory" stuffs text into a vector store and hopes similarity search
-finds it again. This demo treats agent memory as what it actually is: state.
-Every memory is a typed record:
-
-```
-kind:        preference
-subject:     user
-predicate:   prefers_editor
-value:       neovim
-confidence:  1.0
-source:      user_stated
-status:      active
-```
-
-The store enforces the schema. Predicates come from a closed registry
-([predicates.json](predicates.json)) that declares each one's cardinality and
-value type, and those declarations decide what a write means:
-
-- `prefers_editor` is single-valued: a new value supersedes the old one. The
-  old record is not overwritten; it flips to `status: superseded` with a link
-  to its replacement, so the history is queryable.
-- `likes` is multi-valued: a new value is an additional fact, and repeating
-  an existing one is idempotent.
-- `daily_step_goal` is a number and `uses_dark_mode` is a boolean: values are
-  validated against the declared type (the string "8000" is rejected with an
-  error naming the expected type, and the model corrects itself) and stored
-  as that type, so numbers compare numerically in recall filters.
-
-Supersession is a consequence of the schema, never a model judgment. The
-model's job is conversation; the database's job is semantics. The schema
-itself is enforced by the demo's store layer; polign_db contributes the typed
-values, the filters, and the durability underneath it.
-
-Everything is backed by [polign_db](https://polign.com), so the source of
-truth is an object-store bucket. Writes are durable before they are
-acknowledged, reads see your writes immediately, and the server can be killed
-and restarted from the bucket with nothing lost.
-
-## Run it
-
-You need Go, an Anthropic or OpenAI API key, and `polign-server`
-(`curl -fsSL https://get.polign.com | sh`).
+You'll need Go 1.25+, Polign server v0.6.4+, and an Anthropic or OpenAI API key.
+[Install Polign](https://github.com/Polign/polign#install), then:
 
 ```sh
 export ANTHROPIC_API_KEY=...
+./run-demo.sh fs:./recall-bucket -wikipedia-collection ""
+```
+
+This starts a local database and the terminal agent. Memory uses Recall's
+built-in lexical embedder; there is no model download for memory retrieval.
+To use an OpenAI model, set `OPENAI_API_KEY` and pass its model ID:
+
+```sh
+./run-demo.sh fs:./recall-bucket -wikipedia-collection "" -model gpt-5
+```
+
+Use `/reset` to clear the conversation and check that the agent still reads
+saved memories. `/quit` exits. Run the same command again to reopen the same
+database. Writes and recovery follow Polign's storage guarantees.
+
+For browser chat and the inspector:
+
+```sh
+./run-demo.sh fs:./recall-bucket -wikipedia-collection "" -web 127.0.0.1:8080
+```
+
+Open <http://127.0.0.1:8080>. The inspector is at `/memories/`. Use `-trace=false`
+to keep memory tool inputs and results out of application logs.
+
+## What Recall handles
+
+The demo imports **Recall v0.4.0** directly. It provides:
+
+- Typed facts: strings, numbers, and booleans are validated against the registry.
+- Corrections: a newer assertion replaces a single-valued preference; lists of
+  technologies or interests can hold several values.
+- History: assertions and withdrawals are append-only events. Older records
+  are never rewritten to maintain a status flag.
+- Current and past answers: exact queries, numeric filters, and `as_of` reads
+  use Recall's memory rules.
+- Cached reads: Recall's materialized view uses the backend's log watermark
+  when available and falls back to uncached reads when it cannot verify it.
+
+The [demo registry](predicates.json) includes Recall's starter predicates and
+examples such as `daily_step_goal` (number), `uses_dark_mode` (boolean), and
+`likes` (multiple strings). Supply `-predicates path/to/registry.json` for your
+own definitions.
+
+`memkit` is now an adapter for the demo's tool results and inspector. It calls
+Recall's Go client and Polign HTTP backend; it no longer implements its own
+correction or deletion rules. Inspector labels are derived from Recall's audit
+replay, rather than stored in the database.
+
+## Tools you can watch
+
+| Tool | What it does |
+| --- | --- |
+| `remember_fact` / `remember_preference` | Save a typed assertion and report any current belief it replaced. |
+| `recall` | Read current beliefs, search, filter numeric values, or answer as of an earlier time. |
+| `memory_history` | Read the assertions and withdrawals for a subject and predicate. |
+| `list_predicates` | Show the memory types the registry accepts. |
+| `forget` | Withdraw a typed value, or all current values with `all: true`. |
+| `search_wikipedia` | Query the separate knowledge index when enabled. |
+
+An explicit confidence of `0` is preserved; omitting it defaults to `1`.
+Forgetting accepts typed values, including `false` and `0`. It keeps the event
+history and is **not permanent deletion**. `recall(include_history: true)` also
+shows the event log; combine that option only with subject/predicate filters,
+`as_of`, and `limit`.
+
+## Existing demo memories
+
+The default collection is now **`recall_demo_lexical_v1`**. The previous
+`memories` collection used mutable memkit records and a different embedder.
+Those records are left untouched; this version does not migrate them.
+
+If you explicitly select a legacy collection, the demo rejects its old records
+instead of treating superseded or deleted values as current facts. Use the new
+default or choose a fresh collection with `-collection`.
+
+Other agents can use the same memory by connecting to the same Polign endpoint,
+collection, and namespace with Recall v0.4.0, the same registry, and the same
+embedding method. Set `POLIGN_API_KEY` for a server requiring authentication.
+
+The old GIFs and recordings in this repository show the previous memkit
+implementation. The current inspector labels rows `active`, `historical`, or
+`withdrawal`; future events are shown as `pending`.
+
+## Add Wikipedia search
+
+The default `run-demo.sh` store is `s3://polign-demo-wiki-en/polign-v4`, containing
+the `wikipedia_bge` passage index:
+
+```sh
 ./run-demo.sh
 ```
 
-Claude models are the default. To use an OpenAI model instead, export
-`OPENAI_API_KEY` and pass the model id, e.g.
-`./run-demo.sh -model gpt-5`; the provider is inferred from
-the id. Same store, same tools, same typed
-semantics, because the schema enforcement lives in the database layer, not in
-the prompt or the provider.
+This requires AWS credentials with read access to the index and write access
+for the Recall collection. You can pass a different store URI explicitly.
+Wikipedia search has no write operation. The agent cites returned article URLs,
+and the UI adds a retrieval label only after the search tool succeeds.
 
-That starts a server against `s3://polign-demo-wiki-en/polign-v4` and opens
-the agent. AWS credentials need read access to the Wikipedia index and write
-access for the `memories` collection. Pass another store explicitly when
-needed: `./run-demo.sh s3://my-bucket/prefix`.
+Wikipedia uses lexical search by default. For semantic retrieval, run the
+`polign_demo/serve/embedserve.py` sidecar with the index's
+`BAAI/bge-small-en-v1.5` model and pass `-wikipedia-embed http://127.0.0.1:23200`.
+This does not change the memory embedder or collection.
 
-By default Wikipedia questions use the index's lexical search, which needs no
-second model process. For higher-quality BGE semantic retrieval, run the
-`polign_demo/serve/embedserve.py` sidecar with the same
-`BAAI/bge-small-en-v1.5` model used to build `wikipedia_bge`, then pass its
-address:
+For optional semantic **memory** retrieval, use `-memory-embed model`. That
+loads the demo's existing small local model, downloading it on first use. Its
+default collection is `recall_demo_model_v1`. Keep lexical and model embeddings
+in separate collections; changing the embedder does not migrate stored vectors.
 
-```sh
-./run-demo.sh -wikipedia-embed http://127.0.0.1:23200
-```
+## Deployment and tests
 
-The memory collection continues to use the demo's small local embedder; Polign
-collections can have different dimensions and the two retrieval paths never
-mix records. To run the original memory-only local demo:
+The [dstack deployment](dstack/) runs the agent, an authenticated browser UI,
+and Polign v0.6.5 inside a confidential VM. This change updates the deployment
+configuration; it does not redeploy an existing VM.
 
 ```sh
-./run-demo.sh fs:./demo-bucket -wikipedia-collection ""
+go test -race ./...
+go vet ./...
+python3 tests/restart.py /absolute/path/to/polign-server
 ```
 
-The first run downloads a small embedding model (one-time, ~43 MB). Every
-tool call the agent makes is printed as it happens, so you can watch
-the whole path: model, typed tool, validation, database.
+The restart test uses a temporary local database. It writes and corrects facts,
+kills the server, restarts it from the same store, and verifies typed reads and
+new corrections after recovery. No model API or cloud bucket is used.
 
-## The script
+The [local dstack smoke test](dstack/smoke-test.sh) checks browser authentication,
+routing, health, and the inspector.
 
-**Act 1: read-your-writes.**
+## Options
 
-```
-you> I use Vim as my editor.
-  → remember_preference({"subject":"user","predicate":"prefers_editor","value":"vim"})
-  ← {"stored":{"id":"m-...","value":"vim","status":"active",...}}
+| Flag | Purpose |
+| --- | --- |
+| `-polign` | Database URL; default `http://127.0.0.1:24100`. |
+| `-collection` | Shared memory collection; defaults depend on the memory embedder. |
+| `-memory-embed` | `lexical` (default, no download) or `model` (optional semantic model). |
+| `-model` / `-provider` | Conversation model and optional explicit `anthropic` or `openai` provider. |
+| `-predicates` | Custom registry JSON file. |
+| `-wikipedia-collection` | Read-only knowledge collection; empty disables it. |
+| `-wikipedia-embed` | Optional BGE embedding sidecar for Wikipedia. |
+| `-web` / `-inspect` | Browser chat or a standalone memory inspector address. |
+| `-script` | Replay user lines from a file. |
+| `-trace` | Print tool inputs/results; default `true`. |
+| `-data-dir` / `-data-url` | Model cache and artifact source, used only with `-memory-embed model`. |
 
-you> My daily step goal is 9000.
-  → remember_fact({"subject":"user","predicate":"daily_step_goal","value":9000})
-  ← {"stored":{"id":"m-...","value":9000,"status":"active",...}}
-
-you> What editor do I use?
-  → recall({"subject":"user","predicate":"prefers_editor"})
-  ← {"count":1,"records":[{"value":"vim","status":"active",...}]}
-claude> Vim.
-```
-
-Note the step goal: `9000` is stored as a JSON number, because the registry
-declares `daily_step_goal` a number. Typed in, typed out.
-
-No "eventually consistent" caveat: the write was durable in the bucket before
-the tool call returned.
-
-**Act 2: kill the agent.** Ctrl-C the demo, run it again, ask again. It still
-knows. Memory is not context.
-
-**Act 3: kill the server.** Stop everything, then restart the server from
-nothing but the bucket:
-
-```sh
-kill %1                                  # or ctrl-c the whole demo
-./run-demo.sh                            # same bucket, cold start
-```
-
-Ask again. Still Vim. The agent process, the server process, and the server's
-memory are all disposable; the bucket is the database.
-
-The typed value survived too, and it is still a number:
-
-```
-you> Is my step goal above 8000?
-  → recall({"subject":"user","predicate":"daily_step_goal"})
-  ← {"count":1,"records":[{"value":9000,...}]}
-claude> Yes, your step goal is 9000, which is above 8000.
-```
-
-The value came back as a JSON number after a cold restart, because the
-registry declared it one. When the model wants the database to do the
-comparison instead, recall takes value_min and value_max as numeric range
-filters over number-typed values (see the recall primitives below); the
-integration tests pin that path.
-
-**Act 4: the contradiction (the point of the demo).**
-
-```
-you> I switched to Neovim.
-  → remember_preference({"subject":"user","predicate":"prefers_editor","value":"neovim"})
-  ← {"stored":{"value":"neovim","status":"active",...},
-     "superseded":[{"value":"vim","status":"superseded","superseded_by":"m-...",...}]}
-claude> Noted, you've switched from Vim to Neovim.
-
-you> What editors have I used over time?
-  → recall({"subject":"user","predicate":"prefers_editor","include_history":true})
-  ← {"count":2,"records":[...vim superseded..., ...neovim active...]}
-```
-
-The database knew `prefers_editor` is single-valued, so the write became a
-supersession, with the old value kept as linked history. No prompt told the
-model to detect a contradiction; the schema did it.
-
-## Inspect the store
-
-Run with `-inspect 127.0.0.1:24102` (for example
-`./run-demo.sh fs:./demo-bucket -inspect 127.0.0.1:24102`) and open that
-address in a browser. You get one read-only table of every record the agent
-can see, refreshing as you talk; superseded rows are struck through and link
-to the record that replaced them.
-
-![The inspector after the four acts: the superseded Vim record struck through, Neovim active](inspector.png)
-
-## Run it in a dstack TEE
-
-The [dstack deployment](dstack/) runs the agent, Polign, persistent storage,
-and an authenticated browser UI inside one confidential VM. It includes a
-local Compose override, a deployment configuration, checksum-pinned Polign
-installation, and an end-to-end routing/authentication smoke test.
-
-The application also has a web mode outside dstack:
-
-```sh
-go run . -web 127.0.0.1:8080 -inspect ""
-```
-
-Open <http://127.0.0.1:8080>; the memory inspector is available at
-`/memories/`. Use `-trace=false` when logs must not contain memory tool inputs
-and results.
-
-## Record the script
-
-`record-demo.sh` replays all four acts hands-free against a fresh bucket,
-including the kill -9 and the cold restart, so the whole thing can be
-captured with `asciinema rec demo.cast -c ./record-demo.sh`. Run
-`./run-demo.sh` once first so the embedding model is already cached. You can
-also replay any single act yourself:
-`./run-demo.sh fs:./demo-bucket -script demo/act1.txt`.
-
-## Recall and knowledge search are separate primitives
-
-- **Exact:** `recall(subject, predicate, kind, min_confidence, value_min,
-  value_max)` is a filtered query over typed metadata. `confidence` and
-  number-typed values are stored as numbers, so `min_confidence: 0.8` and
-  `value_min: 8000` compare numerically, not stringly.
-- **Semantic:** `recall(query: "my dev setup")` embeds the query and searches
-  the same records, still filtered to `status: active`.
-
-Semantic retrieval and durable typed state are different primitives. Here
-they run over one store, in one bucket, with one consistency contract.
-
-General-knowledge questions use a third tool, `search_wikipedia(query, limit)`.
-It always targets `wikipedia_bge` through Polign's cold object-store query path
-and returns `title`, `url`, and `text` for grounding. It has no write operation;
-the remember and forget tools remain bound to `memories` only.
-After a successful search, the reply is labeled `Retrieved from wikipedia_bge`
-in both the web UI and terminal. The label comes from the completed tool call,
-not from model-written text, so memory-only answers do not receive it.
-
-## Use the pattern in your own agent
-
-The memory layer is an importable package,
-[memkit](memkit/): the typed client, the predicate registry, and the store
-with its supersession semantics. Bring your own predicates JSON and your own
-embedder:
-
-```go
-import "github.com/Polign/polign_memory_demo/memkit"
-
-registry, _ := memkit.LoadRegistry(myPredicatesJSON)
-db := memkit.NewPolignClient("http://127.0.0.1:24100")
-store := memkit.NewStore(db, "memories", registry, myEmbedder)
-
-store.Remember("preference", "user", "prefers_editor", "neovim", 1, "user_stated")
-records, _ := store.Recall(memkit.RecallQuery{Subject: "user", Predicate: "prefers_editor"})
-```
-
-Writes are validated against the registry, supersession follows from
-cardinality, and recall is the same two primitives the demo uses.
-
-## Tests
-
-```sh
-go test ./...                    # unit tests against an in-process fake server
-```
-
-The durability claims are pinned by integration tests against a real server:
-
-```sh
-polign-server -store fs:/tmp/mem-bucket -http 127.0.0.1:24100 -grpc 127.0.0.1:24101 &
-POLIGN_MEMORY_DEMO_URL=http://127.0.0.1:24100 go test -run TestIntegrationWrite -v
-kill -9 %1   # yes, -9
-polign-server -store fs:/tmp/mem-bucket -http 127.0.0.1:24100 -grpc 127.0.0.1:24101 &
-POLIGN_MEMORY_DEMO_URL=http://127.0.0.1:24100 go test -run 'TestIntegrationRecallAfterRestart|TestIntegrationWriteAfterRestart' -v
-```
-
-The last phase writes a fresh supersession against the cold-started server and
-asserts it is immediately visible to exact recall — the same order as act 4.
-
-## Flags
-
-```
--polign      polign_db HTTP address        (default http://127.0.0.1:24100)
--collection  collection for the memories   (default "memories")
--wikipedia-collection  read-only knowledge collection (default "wikipedia_bge"; empty disables)
--wikipedia-embed       optional BGE sidecar; enables semantic search
--wikipedia-embed-dim   BGE vector width (default 384)
--wikipedia-nprobe      IVF cells for semantic Wikipedia search (default 8)
--model       model id                      (default claude-opus-5; gpt-*/o* ids use OpenAI)
--provider    force "anthropic" or "openai" instead of inferring from -model
--predicates  registry JSON to use instead of the embedded one
--data-dir    embedding model cache dir     (default: user cache dir)
--script      replay user lines from a file instead of reading stdin, then exit
--inspect     serve the read-only inspector at this address (e.g. 127.0.0.1:24102)
--web        serve browser chat + inspector instead of the terminal (e.g. :8080)
--trace      print memory tool inputs/results (default true; disable for public logs)
-```
+Run `go run . -help` for all options.
 
 ## License
 

@@ -69,7 +69,7 @@ func (a *anthropicAgent) Turn(ctx context.Context, userText string) (AgentReply,
 			case anthropic.TextBlock:
 				replies = append(replies, v.Text)
 			case anthropic.ToolUseBlock:
-				result, isErr := a.tb.run(v.Name, []byte(v.JSON.Input.Raw()))
+				result, isErr := a.tb.run(ctx, v.Name, []byte(v.JSON.Input.Raw()))
 				if source := a.tb.retrievalSource(v.Name, isErr); source != "" {
 					retrievedFrom[source] = true
 				}

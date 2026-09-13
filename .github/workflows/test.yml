@@ -1,0 +1,27 @@
+name: test
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: go test -race ./...
+      - run: go vet ./...
+      - name: Download pinned test server
+        run: |
+          curl -fsSL https://github.com/Polign/polign/releases/download/v0.6.5/polign_db_linux_amd64.tar.gz -o "$RUNNER_TEMP/polign.tar.gz"
+          echo "ae1999931a08f4fc876984cc00416d71cc45cf5bc653ad7f4656cbbd9af19c15  $RUNNER_TEMP/polign.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/polign.tar.gz" -C "$RUNNER_TEMP" polign-server
+      - name: Recall recovery after a server crash
+        run: python tests/restart.py "$RUNNER_TEMP/polign-server"

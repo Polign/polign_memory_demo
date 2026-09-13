@@ -1,87 +1,24 @@
-// Package memkit is the demo's memory layer as an importable package: a
-// registry of typed predicates, a store that turns writes into database
-// semantics (validation, cardinality-driven supersession, idempotent dedupe),
-// and exact plus semantic recall over one polign_db collection. Bring your
-// own predicates JSON and embedder; see the repo README for the pattern.
+// Package memkit adapts Recall's Go client to the demo's tools and inspector.
+// Recall owns validation, event storage, corrections, retractions, and folding.
 package memkit
 
 import (
-	"crypto/sha256"
-	"encoding/json"
+	"context"
 	"fmt"
-	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Polign/recall"
 )
 
-// Predicate is one registry entry. Cardinality decides what a second value
-// for the same subject means: "single" makes the new value supersede the old
-// one, "multi" makes it an additional fact. ValueType decides what a value
-// IS: a string, a number, or a boolean. Values are stored with that type in
-// the database, so a number compares numerically in recall filters instead
-// of lexically.
-type Predicate struct {
-	Cardinality string `json:"cardinality"`
-	ValueType   string `json:"value_type"`
-	Description string `json:"description"`
-}
+type Predicate = recall.Predicate
+type Registry = recall.Registry
 
-// Registry is the closed set of predicates the store accepts. A write with an
-// unregistered predicate is rejected, so the agent cannot invent near-duplicate
-// predicates ("editor_preference" vs "prefers_editor") and split one fact
-// across two names.
-type Registry map[string]Predicate
+func LoadRegistry(raw []byte) (Registry, error) { return recall.LoadRegistry(raw) }
 
-func LoadRegistry(raw []byte) (Registry, error) {
-	var r Registry
-	if err := json.Unmarshal(raw, &r); err != nil {
-		return nil, fmt.Errorf("predicate registry: %w", err)
-	}
-	for name, p := range r {
-		if !predicateName.MatchString(name) {
-			return nil, fmt.Errorf("predicate registry: %q is not snake_case", name)
-		}
-		if p.Cardinality != "single" && p.Cardinality != "multi" {
-			return nil, fmt.Errorf("predicate registry: %q has cardinality %q, want single or multi", name, p.Cardinality)
-		}
-		switch p.ValueType {
-		case "", "string", "number", "boolean":
-		default:
-			return nil, fmt.Errorf("predicate registry: %q has value_type %q, want string, number, or boolean", name, p.ValueType)
-		}
-	}
-	return r, nil
-}
-
-// Names returns the registered predicates sorted, for error messages and the
-// system prompt.
-func (r Registry) Names() []string {
-	out := make([]string, 0, len(r))
-	for name := range r {
-		out = append(out, name)
-	}
-	sort.Strings(out)
-	return out
-}
-
-// PromptTable renders the registry for the agent's system prompt.
-func (r Registry) PromptTable() string {
-	var b strings.Builder
-	for _, name := range r.Names() {
-		p := r[name]
-		vt := p.ValueType
-		if vt == "" {
-			vt = "string"
-		}
-		fmt.Fprintf(&b, "- %s (%s-valued %s): %s\n", name, p.Cardinality, vt, p.Description)
-	}
-	return b.String()
-}
-
-// Record is one memory: a typed, durable statement about a subject. Value
-// holds the predicate's declared type: string, float64, or bool.
+// Record is a presentation of a Recall belief or event, never stored metadata.
+// Historical assertions and withdrawals remain visible in the inspector.
 type Record struct {
 	ID           string  `json:"id"`
 	Kind         string  `json:"kind"`
@@ -93,137 +30,65 @@ type Record struct {
 	Status       string  `json:"status"`
 	SupersededBy string  `json:"superseded_by,omitempty"`
 	ObservedAt   string  `json:"observed_at"`
+	Retraction   bool    `json:"retraction,omitempty"`
 }
 
-// RememberResult is what a write reports back to the agent: the record that
-// now holds, whether it already existed, and anything it superseded.
 type RememberResult struct {
 	Stored     Record   `json:"stored"`
 	Existing   bool     `json:"already_known,omitempty"`
 	Superseded []Record `json:"superseded,omitempty"`
 }
 
-// Store enforces the typed memory model over a polign_db collection. It is
-// the layer between the agent's tools and the database: writes are validated
-// against the registry, supersession follows from predicate cardinality (never
-// from model judgment), and every record's vector is derived from its own text
-// so semantic recall searches the same records exact recall filters.
 type Store struct {
-	db         VectorDB
+	client     *recall.Client
+	backend    recall.Backend
 	collection string
-	registry   Registry
-	embed      func(string) []float32
-	now        func() time.Time
 }
 
-// VectorDB is the polign_db surface the store needs; *PolignClient implements
-// it, and so can a fake in tests.
-type VectorDB interface {
-	Put(collection, id string, values []float32, metadata map[string]any) error
-	GetMany(collection string, ids []string) ([]StoredVector, error)
-	List(collection string, filter map[string]any, limit int) ([]StoredVector, int, error)
-	Search(collection string, values []float32, k int, filter map[string]any) ([]Hit, error)
+func NewStore(backend recall.Backend, collection string, registry Registry, embedder recall.Embedder) (*Store, error) {
+	guarded := memoryBackend{backend}
+	client, err := recall.NewClient(recall.Config{Backend: guarded, Collection: collection, Registry: registry, Embedder: embedder, Materialize: true})
+	if err != nil {
+		return nil, err
+	}
+	return &Store{client: client, backend: guarded, collection: collection}, nil
 }
 
-func NewStore(db VectorDB, collection string, registry Registry, embed func(string) []float32) *Store {
-	return &Store{db: db, collection: collection, registry: registry, embed: embed, now: time.Now}
+// Check verifies listing support and catches an old demo collection at startup.
+func (s *Store) Check(ctx context.Context) error {
+	_, _, err := s.backend.List(ctx, s.collection, nil, 1)
+	if err != nil {
+		return fmt.Errorf("Recall needs a dedicated event collection and a Polign server with complete listings (v0.6.4+): %w", err)
+	}
+	return nil
 }
 
-// Registry returns the predicate registry the store enforces.
-func (s *Store) Registry() Registry {
-	return s.registry
-}
+func (s *Store) Registry() Registry { return s.client.Registry() }
 
-var (
-	predicateName = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
-	validSources  = map[string]bool{"user_stated": true, "agent_inferred": true, "tool_result": true}
-)
-
-// Remember validates and writes one memory. For a single-valued predicate an
-// active record with a different value is flipped to superseded and linked to
-// the new record; the same value is idempotent. For a multi-valued predicate
-// the exact same (subject, predicate, value) is idempotent and a new value is
-// simply an additional record.
+// Remember preserves the old demo helper's zero-means-default convention.
+// Tool callers use RememberContext so an explicit confidence of zero survives.
 func (s *Store) Remember(kind, subject, predicate string, value any, confidence float64, source string) (RememberResult, error) {
-	var zero RememberResult
-
-	if kind != "fact" && kind != "preference" {
-		return zero, fmt.Errorf(`kind must be "fact" or "preference", got %q`, kind)
+	var conf *float64
+	if confidence != 0 {
+		conf = &confidence
 	}
-	subject = strings.ToLower(strings.TrimSpace(subject))
-	if subject == "" {
-		return zero, fmt.Errorf("subject must not be empty")
-	}
-	predicate = strings.TrimSpace(predicate)
-	if !predicateName.MatchString(predicate) {
-		return zero, fmt.Errorf("predicate must be snake_case (e.g. prefers_editor), got %q", predicate)
-	}
-	spec, ok := s.registry[predicate]
-	if !ok {
-		return zero, fmt.Errorf("predicate %q is not in the registry; registered predicates are: %s", predicate, strings.Join(s.registry.Names(), ", "))
-	}
-	value, err := normalizeValue(predicate, spec, value)
-	if err != nil {
-		return zero, err
-	}
-	if confidence == 0 {
-		confidence = 1.0
-	}
-	if confidence < 0 || confidence > 1 {
-		return zero, fmt.Errorf("confidence must be in [0, 1], got %g", confidence)
-	}
-	if source == "" {
-		source = "user_stated"
-	}
-	if !validSources[source] {
-		return zero, fmt.Errorf(`source must be "user_stated", "agent_inferred", or "tool_result", got %q`, source)
-	}
-
-	rec := Record{
-		ID:         recordID(subject, predicate, value),
-		Kind:       kind,
-		Subject:    subject,
-		Predicate:  predicate,
-		Value:      value,
-		Confidence: confidence,
-		Source:     source,
-		Status:     "active",
-		ObservedAt: s.now().UTC().Format(time.RFC3339),
-	}
-
-	// The active records this write competes with: same value for both
-	// cardinalities (idempotency), any value for single-valued (supersession).
-	active, err := s.activeRecords(subject, predicate)
-	if err != nil {
-		return zero, err
-	}
-
-	var superseded []Record
-	for _, existing := range active {
-		if existing.ID == rec.ID {
-			return RememberResult{Stored: existing, Existing: true}, nil
-		}
-		if spec.Cardinality == "single" {
-			existing.Status = "superseded"
-			existing.SupersededBy = rec.ID
-			superseded = append(superseded, existing)
-		}
-	}
-
-	if err := s.put(rec); err != nil {
-		return zero, err
-	}
-	for _, old := range superseded {
-		if err := s.rewrite(old); err != nil {
-			return zero, fmt.Errorf("stored %s but failed to supersede %s: %w", rec.ID, old.ID, err)
-		}
-	}
-	return RememberResult{Stored: rec, Superseded: superseded}, nil
+	return s.RememberContext(context.Background(), recall.RememberRequest{Kind: kind, Subject: subject, Predicate: predicate, Value: value, Confidence: conf, Source: source})
 }
 
-// RecallQuery is one read. With Query set the read is semantic (the query text
-// is embedded and searched); without it the read is an exact filtered listing.
-// Both modes apply the same structural filters over the same records.
+func (s *Store) RememberContext(ctx context.Context, q recall.RememberRequest) (RememberResult, error) {
+	result, err := s.client.Remember(ctx, q)
+	if err != nil {
+		return RememberResult{}, err
+	}
+	out := RememberResult{Stored: beliefRecord(result.Stored), Existing: result.Existing}
+	for _, b := range result.Superseded {
+		rec := beliefRecord(b)
+		rec.Status, rec.SupersededBy = "superseded", out.Stored.ID
+		out.Superseded = append(out.Superseded, rec)
+	}
+	return out, nil
+}
+
 type RecallQuery struct {
 	Query          string
 	Subject        string
@@ -232,293 +97,147 @@ type RecallQuery struct {
 	MinConfidence  float64
 	IncludeHistory bool
 	Limit          int
-	// ValueMin / ValueMax bound number-typed values. Because values are
-	// stored as real numbers, these compare numerically in the database, not
-	// lexically.
-	ValueMin *float64
-	ValueMax *float64
+	ValueMin       *float64
+	ValueMax       *float64
+	AsOf           time.Time
 }
 
 func (s *Store) Recall(q RecallQuery) ([]Record, error) {
-	// Forgotten records never come back; include_history only adds the
-	// superseded ones.
-	filter := map[string]any{"status": "active"}
+	return s.RecallContext(context.Background(), q)
+}
+
+func (s *Store) RecallContext(ctx context.Context, q RecallQuery) ([]Record, error) {
 	if q.IncludeHistory {
-		filter["status"] = map[string]any{"$in": []string{"active", "superseded"}}
+		return s.historyRecords(ctx, q)
 	}
-	if q.Subject != "" {
-		filter["subject"] = strings.ToLower(strings.TrimSpace(q.Subject))
-	}
-	if q.Predicate != "" {
-		filter["predicate"] = strings.TrimSpace(q.Predicate)
-	}
-	if q.Kind != "" {
-		filter["kind"] = q.Kind
-	}
-	if q.MinConfidence > 0 {
-		filter["confidence"] = map[string]any{"$gte": q.MinConfidence}
-	}
-	if q.ValueMin != nil || q.ValueMax != nil {
-		bounds := map[string]any{}
-		if q.ValueMin != nil {
-			bounds["$gte"] = *q.ValueMin
-		}
-		if q.ValueMax != nil {
-			bounds["$lte"] = *q.ValueMax
-		}
-		filter["value"] = bounds
-	}
-	limit := q.Limit
-	if limit <= 0 {
-		limit = 20
-	}
-
-	if q.Query != "" {
-		hits, err := s.db.Search(s.collection, s.embed(q.Query), limit, filter)
-		if err != nil {
-			return nil, err
-		}
-		out := make([]Record, 0, len(hits))
-		for _, h := range hits {
-			out = append(out, recordFromMetadata(h.ID, h.Metadata))
-		}
-		return out, nil
-	}
-
-	return s.filteredRecords(filter, limit)
-}
-
-// Forget tombstones matching records: their status flips to "deleted", which
-// every recall mode excludes. With value set only that exact record goes;
-// without it every record for (subject, predicate) goes, superseded history
-// included. A tombstone is a write, not a delete, on purpose: writes are
-// read-your-writes through the server's tail overlay, while a hard delete of
-// a record already persisted to a bucket segment can ack and still be served
-// from the segment until compaction. Re-remembering the same statement
-// revives the record (same content-derived id, upserted back to active).
-func (s *Store) Forget(subject, predicate, value string) (int, error) {
-	subject = strings.ToLower(strings.TrimSpace(subject))
-	predicate = strings.TrimSpace(predicate)
-	if subject == "" || predicate == "" {
-		return 0, fmt.Errorf("forget needs a subject and a predicate")
-	}
-	filter := map[string]any{"subject": subject, "predicate": predicate}
-	if value = strings.TrimSpace(value); value != "" {
-		// Typed records only match typed operands, so parse the value to the
-		// predicate's declared type before filtering on it.
-		typed, err := s.parseValue(predicate, value)
-		if err != nil {
-			return 0, err
-		}
-		filter["value"] = typed
-	}
-	records, err := s.filteredRecords(filter, 100)
+	beliefs, err := s.client.Recall(ctx, recall.Query{Text: q.Query, Subject: q.Subject, Predicate: q.Predicate, Kind: q.Kind, MinConfidence: q.MinConfidence, Limit: q.Limit, ValueMin: q.ValueMin, ValueMax: q.ValueMax, AsOf: q.AsOf})
 	if err != nil {
-		return 0, err
-	}
-	forgotten := 0
-	for _, rec := range records {
-		if rec.Status == "deleted" {
-			continue
-		}
-		rec.Status = "deleted"
-		if err := s.rewrite(rec); err != nil {
-			return forgotten, err
-		}
-		forgotten++
-	}
-	return forgotten, nil
-}
-
-// parseValue converts a value's string form to the predicate's declared type,
-// for callers that address records by value (forget).
-func (s *Store) parseValue(predicate, value string) (any, error) {
-	spec, ok := s.registry[predicate]
-	if !ok {
-		return value, nil
-	}
-	switch spec.ValueType {
-	case "number":
-		f, err := strconv.ParseFloat(value, 64)
-		if err != nil {
-			return nil, fmt.Errorf("%s expects a number value, got %q", predicate, value)
-		}
-		return f, nil
-	case "boolean":
-		b, err := strconv.ParseBool(value)
-		if err != nil {
-			return nil, fmt.Errorf("%s expects a boolean value, got %q", predicate, value)
-		}
-		return b, nil
-	default:
-		return value, nil
-	}
-}
-
-// activeRecords lists the active records for (subject, predicate).
-func (s *Store) activeRecords(subject, predicate string) ([]Record, error) {
-	return s.filteredRecords(map[string]any{
-		"subject":   subject,
-		"predicate": predicate,
-		"status":    "active",
-	}, 100)
-}
-
-// filteredRecords uses deterministic listing on a warm collection. A server
-// cold-started from an object store intentionally has no complete in-memory
-// listing index, so Polign rejects List with ErrColdListUnsupported. Filtered
-// vector search scans the same cold segments and merges the WAL tail, making
-// it the exact-filter fallback for S3/GCS/Azure failover nodes.
-func (s *Store) filteredRecords(filter map[string]any, limit int) ([]Record, error) {
-	vectors, _, err := s.db.List(s.collection, filter, limit)
-	if err == nil {
-		out := make([]Record, 0, len(vectors))
-		for _, v := range vectors {
-			out = append(out, recordFromMetadata(v.ID, v.Metadata))
-		}
-		return out, nil
-	}
-	if !strings.Contains(err.Error(), "listing is not supported for a cold-served resource") {
 		return nil, err
 	}
-
-	hits, searchErr := s.db.Search(s.collection, s.embed("typed durable memory record"), limit, filter)
-	if searchErr != nil {
-		return nil, searchErr
-	}
-	out := make([]Record, 0, len(hits))
-	for _, hit := range hits {
-		out = append(out, recordFromMetadata(hit.ID, hit.Metadata))
+	out := make([]Record, 0, len(beliefs))
+	for _, b := range beliefs {
+		out = append(out, beliefRecord(b))
 	}
 	return out, nil
 }
 
-// put writes a record with a freshly embedded vector.
-func (s *Store) put(rec Record) error {
-	return s.db.Put(s.collection, rec.ID, s.embed(rec.text()), rec.metadata())
-}
-
-// rewrite re-puts an existing record with updated metadata, preserving its
-// exact stored vector (GetMany is the byte-exact read).
-func (s *Store) rewrite(rec Record) error {
-	stored, err := s.db.GetMany(s.collection, []string{rec.ID})
+// The inspector derives its labels from an audited Recall replay. It does not
+// implement correction rules or update old rows to maintain their status.
+func (s *Store) historyRecords(ctx context.Context, q RecallQuery) ([]Record, error) {
+	if q.Query != "" || q.Kind != "" || q.MinConfidence != 0 || q.ValueMin != nil || q.ValueMax != nil {
+		return nil, fmt.Errorf("history accepts subject, predicate, as_of and limit; use current recall for search and value filters")
+	}
+	limit := q.Limit
+	if limit <= 0 {
+		limit = 1000
+	}
+	if limit > recall.MaxExport {
+		return nil, fmt.Errorf("history limit exceeds %d", recall.MaxExport)
+	}
+	bundle, err := s.client.ExportAudit(ctx, recall.AuditRequest{Scope: recall.AuditScope{Subject: q.Subject, Predicate: q.Predicate}, AsOf: q.AsOf})
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if len(stored) == 0 {
-		return fmt.Errorf("record %s vanished during rewrite", rec.ID)
+	if len(bundle.Events) > limit {
+		return nil, fmt.Errorf("history contains %d events; narrow subject/predicate or raise limit (maximum %d)", len(bundle.Events), recall.MaxExport)
 	}
-	return s.db.Put(s.collection, rec.ID, stored[0].Values, rec.metadata())
-}
-
-// normalizeValue enforces the predicate's declared value type. Deliberately no
-// coercion: a number predicate rejects the string "8000" with an error naming
-// the expected type, and the model corrects the call, the same self-repair
-// loop the registry uses for unknown predicates.
-func normalizeValue(predicate string, spec Predicate, v any) (any, error) {
-	vt := spec.ValueType
-	if vt == "" {
-		vt = "string"
+	beliefs, err := bundle.Replay()
+	if err != nil {
+		return nil, err
 	}
-	switch vt {
-	case "string":
-		s, ok := v.(string)
-		if !ok {
-			return nil, fmt.Errorf("%s expects a string value, got %s", predicate, describeValue(v))
+	active := map[string]bool{}
+	for _, b := range beliefs {
+		active[b.EventID] = true
+	}
+	out := make([]Record, 0, len(bundle.Events))
+	for _, e := range bundle.Events {
+		status := "historical"
+		switch {
+		case e.ObservedAt.After(bundle.AsOf):
+			status = "pending"
+		case e.Retraction:
+			status = "withdrawal"
+		case active[e.ID]:
+			status = "active"
 		}
-		s = strings.TrimSpace(s)
-		if s == "" {
-			return nil, fmt.Errorf("value must not be empty")
+		out = append(out, Record{ID: e.ID, Kind: e.Kind, Subject: e.Subject, Predicate: e.Predicate, Value: e.Value, Confidence: e.Confidence, Source: e.Source, Status: status, ObservedAt: e.ObservedAt.UTC().Format(time.RFC3339Nano), Retraction: e.Retraction})
+	}
+	return out, nil
+}
+
+func (s *Store) History(ctx context.Context, subject, predicate string) ([]recall.Event, error) {
+	return s.client.History(ctx, subject, predicate)
+}
+
+func (s *Store) ForgetContext(ctx context.Context, q recall.ForgetRequest) (int, error) {
+	return s.client.Forget(ctx, q)
+}
+
+// Forget adapts the old string-based helper. Model tools use typed values and
+// explicit All through ForgetContext, so false and zero cannot clear a pair.
+func (s *Store) Forget(subject, predicate, value string) (int, error) {
+	q := recall.ForgetRequest{Subject: subject, Predicate: predicate, All: strings.TrimSpace(value) == ""}
+	if !q.All {
+		q.Value = value
+		var err error
+		switch s.Registry()[predicate].ValueType {
+		case "number":
+			q.Value, err = strconv.ParseFloat(value, 64)
+		case "boolean":
+			q.Value, err = strconv.ParseBool(value)
 		}
-		return s, nil
-	case "number":
-		f, ok := v.(float64)
-		if !ok {
-			return nil, fmt.Errorf("%s expects a number value, got %s", predicate, describeValue(v))
+		if err != nil {
+			return 0, err
 		}
-		return f, nil
-	default: // boolean
-		b, ok := v.(bool)
-		if !ok {
-			return nil, fmt.Errorf("%s expects a boolean value, got %s", predicate, describeValue(v))
+	}
+	return s.ForgetContext(context.Background(), q)
+}
+
+func beliefRecord(b recall.Belief) Record {
+	return Record{ID: b.EventID, Kind: b.Kind, Subject: b.Subject, Predicate: b.Predicate, Value: b.Value, Confidence: b.Confidence, Source: b.Source, Status: "active", ObservedAt: b.ObservedAt.UTC().Format(time.RFC3339Nano)}
+}
+
+// Legacy memkit rows were mutated in place. Treating every old row as an
+// assertion would revive superseded/deleted facts. Refuse them rather than
+// guessing a history or mixing embedding formats; the old collection stays put.
+type memoryBackend struct{ recall.Backend }
+
+func legacyRecord(metadata map[string]any) error {
+	if _, exists := metadata["status"]; exists {
+		return fmt.Errorf("legacy memkit records found; use a new Recall collection (default recall_demo_lexical_v1); old memories are not automatically migrated")
+	}
+	return nil
+}
+
+func (b memoryBackend) List(ctx context.Context, collection string, filter map[string]any, limit int) ([]recall.StoredVector, int, error) {
+	rows, total, err := b.Backend.List(ctx, collection, filter, limit)
+	if err != nil {
+		return nil, 0, err
+	}
+	for _, row := range rows {
+		if err := legacyRecord(row.Metadata); err != nil {
+			return nil, 0, err
 		}
-		return b, nil
 	}
+	return rows, total, nil
 }
 
-func describeValue(v any) string {
-	switch x := v.(type) {
-	case string:
-		return fmt.Sprintf("string %q", x)
-	case float64:
-		return fmt.Sprintf("number %g", x)
-	case bool:
-		return fmt.Sprintf("boolean %t", x)
-	case nil:
-		return "nothing"
-	default:
-		return fmt.Sprintf("%T", v)
+func (b memoryBackend) Search(ctx context.Context, collection string, values []float32, k int, filter map[string]any) ([]recall.Hit, error) {
+	hits, err := b.Backend.Search(ctx, collection, values, k, filter)
+	if err != nil {
+		return nil, err
 	}
-}
-
-// canonicalValue renders a value for identity: record ids and idempotency
-// compare canonical forms, so "Neovim" and "neovim" are the same statement
-// and 8000 written twice is one record.
-func canonicalValue(v any) string {
-	switch x := v.(type) {
-	case string:
-		return strings.ToLower(x)
-	case float64:
-		return strconv.FormatFloat(x, 'g', -1, 64)
-	case bool:
-		return strconv.FormatBool(x)
-	default:
-		return fmt.Sprintf("%v", v)
+	for _, hit := range hits {
+		if err := legacyRecord(hit.Metadata); err != nil {
+			return nil, err
+		}
 	}
+	return hits, nil
 }
 
-// text is the natural-language rendering a record is embedded from.
-func (rec Record) text() string {
-	return rec.Subject + " " + strings.ReplaceAll(rec.Predicate, "_", " ") + " " + fmt.Sprintf("%v", rec.Value)
-}
-
-// metadata flattens a record to typed metadata. Confidence stays a JSON
-// number so range filters compare numerically; observed_at is an RFC3339
-// string, the documented convention for timestamps.
-func (rec Record) metadata() map[string]any {
-	return map[string]any{
-		"kind":          rec.Kind,
-		"subject":       rec.Subject,
-		"predicate":     rec.Predicate,
-		"value":         rec.Value,
-		"confidence":    rec.Confidence,
-		"source":        rec.Source,
-		"status":        rec.Status,
-		"superseded_by": rec.SupersededBy,
-		"observed_at":   rec.ObservedAt,
+func (b memoryBackend) Watermark(ctx context.Context, collection string) (string, error) {
+	if backend, ok := b.Backend.(recall.WatermarkBackend); ok {
+		return backend.Watermark(ctx, collection)
 	}
-}
-
-func recordFromMetadata(id string, m map[string]any) Record {
-	str := func(k string) string { v, _ := m[k].(string); return v }
-	conf, _ := m["confidence"].(float64)
-	return Record{
-		ID:           id,
-		Kind:         str("kind"),
-		Subject:      str("subject"),
-		Predicate:    str("predicate"),
-		Value:        m["value"], // string, float64, or bool, as stored
-		Confidence:   conf,
-		Source:       str("source"),
-		Status:       str("status"),
-		SupersededBy: str("superseded_by"),
-		ObservedAt:   str("observed_at"),
-	}
-}
-
-// recordID derives a record's id from its content, so re-remembering the
-// exact same statement is an idempotent upsert by construction.
-func recordID(subject, predicate string, value any) string {
-	h := sha256.Sum256([]byte(subject + "\x00" + predicate + "\x00" + canonicalValue(value)))
-	return fmt.Sprintf("m-%x", h[:6])
+	return "", recall.ErrWatermarkUnsupported
 }

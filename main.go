@@ -1,8 +1,6 @@
-// polign_memory_demo is a terminal agent with a typed, durable memory store
-// backed by polign_db. Memories are typed records with database semantics
-// (registry-enforced predicates, cardinality-driven supersession, filtered
-// and semantic recall), and the source of truth is the server's bucket: kill
-// the agent, kill the server, wipe local state, and the memories survive.
+// polign_memory_demo is a terminal and web agent using Recall for typed memory
+// and Polign for storage. Recall validates facts, applies corrections, and
+// preserves the history of assertions and withdrawals across sessions.
 package main
 
 import (
@@ -13,13 +11,17 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/Polign/polign_memory_demo/memkit"
+	"github.com/Polign/recall"
+	recallpolign "github.com/Polign/recall/polign"
 )
 
 func main() {
 	polignURL := flag.String("polign", "http://127.0.0.1:24100", "polign_db server HTTP address")
-	collection := flag.String("collection", "memories", "collection the memories live in (one per agent identity)")
+	collection := flag.String("collection", "", "shared Recall collection (default recall_demo_lexical_v1, or recall_demo_model_v1 with -memory-embed model)")
+	memoryEmbed := flag.String("memory-embed", "lexical", "memory retrieval: lexical (no download) or model (optional local semantic model)")
 	wikipediaCollection := flag.String("wikipedia-collection", "wikipedia_bge", "read-only Wikipedia collection (empty disables Wikipedia answers)")
 	wikipediaEmbed := flag.String("wikipedia-embed", "", "optional BGE query-embedding sidecar address; enables semantic search (empty uses lexical search)")
 	wikipediaEmbedDim := flag.Int("wikipedia-embed-dim", 384, "vector width returned by the Wikipedia BGE sidecar")
@@ -35,7 +37,13 @@ func main() {
 	traceTools := flag.Bool("trace", true, "print tool inputs and results; disable when deployment logs are public")
 	flag.Parse()
 
-	if err := run(*polignURL, *collection, *wikipediaCollection, *wikipediaEmbed, *wikipediaEmbedDim, *wikipediaNProbe, *model, *provider, *dataDir, *dataURL, *predicatesPath, *scriptPath, *inspectAddr, *webAddr, *traceTools); err != nil {
+	if *collection == "" {
+		*collection = "recall_demo_lexical_v1"
+		if *memoryEmbed == "model" {
+			*collection = "recall_demo_model_v1"
+		}
+	}
+	if err := run(*memoryEmbed, *polignURL, *collection, *wikipediaCollection, *wikipediaEmbed, *wikipediaEmbedDim, *wikipediaNProbe, *model, *provider, *dataDir, *dataURL, *predicatesPath, *scriptPath, *inspectAddr, *webAddr, *traceTools); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
@@ -51,7 +59,7 @@ func inferProvider(model string) string {
 	return "anthropic"
 }
 
-func run(polignURL, collection, wikipediaCollection, wikipediaEmbed string, wikipediaEmbedDim, wikipediaNProbe int, model, provider, dataDir, dataURL, predicatesPath, scriptPath, inspectAddr, webAddr string, traceTools bool) error {
+func run(memoryEmbed, polignURL, collection, wikipediaCollection, wikipediaEmbed string, wikipediaEmbedDim, wikipediaNProbe int, model, provider, dataDir, dataURL, predicatesPath, scriptPath, inspectAddr, webAddr string, traceTools bool) error {
 	logf := func(format string, args ...any) { fmt.Printf(dim+format+reset+"\n", args...) }
 	collection = strings.TrimSpace(collection)
 	wikipediaCollection = strings.TrimSpace(wikipediaCollection)
@@ -74,27 +82,52 @@ func run(polignURL, collection, wikipediaCollection, wikipediaEmbed string, wiki
 		return err
 	}
 
-	if dataDir == "" {
-		cache, err := os.UserCacheDir()
+	var embedder recall.Embedder = recall.LexicalEmbedder{}
+	switch memoryEmbed {
+	case "lexical":
+	case "model":
+		if dataDir == "" {
+			cache, err := os.UserCacheDir()
+			if err != nil {
+				return err
+			}
+			dataDir = filepath.Join(cache, "polign-memory-demo")
+		}
+		if err := EnsureModel(dataDir, dataURL, logf); err != nil {
+			return err
+		}
+		model, err := LoadModel(dataDir)
 		if err != nil {
 			return err
 		}
-		dataDir = filepath.Join(cache, "polign-memory-demo")
-	}
-	if err := EnsureModel(dataDir, dataURL, logf); err != nil {
-		return err
-	}
-	embedder, err := LoadModel(dataDir)
-	if err != nil {
-		return err
+		embedder = recall.EmbedFunc(func(ctx context.Context, text string) ([]float32, error) {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			return model.Embed(text), ctx.Err()
+		})
+	default:
+		return fmt.Errorf("unknown memory embedder %q (want lexical or model)", memoryEmbed)
 	}
 
-	db := memkit.NewPolignClient(polignURL)
+	db := memkit.NewPolignClientWithKey(polignURL, os.Getenv("POLIGN_API_KEY"))
 	if !db.Healthy() {
 		return fmt.Errorf("no polign_db server at %s (start one with: polign-server -store fs:./demo-bucket -http 127.0.0.1:24100)", polignURL)
 	}
 
-	store := memkit.NewStore(db, collection, registry, embedder.Embed)
+	backend, err := recallpolign.New(recallpolign.Config{BaseURL: polignURL, APIKey: os.Getenv("POLIGN_API_KEY")})
+	if err != nil {
+		return err
+	}
+	store, err := memkit.NewStore(backend, collection, registry, embedder)
+	if err != nil {
+		return err
+	}
+	checkCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := store.Check(checkCtx); err != nil {
+		return err
+	}
 	var wikipedia wikipediaSource
 	if wikipediaCollection != "" {
 		wikipedia = newWikipediaSearch(db, wikipediaCollection, wikipediaEmbed, wikipediaEmbedDim, wikipediaNProbe)
@@ -138,7 +171,7 @@ func run(polignURL, collection, wikipediaCollection, wikipediaEmbed string, wiki
 		return fmt.Errorf("unknown provider %q (want anthropic or openai)", provider)
 	}
 
-	fmt.Printf("polign memory demo: %s (%s) against %s (memory %q", model, provider, polignURL, collection)
+	fmt.Printf("Recall memory demo: %s (%s) against %s (memory %q", model, provider, polignURL, collection)
 	if wikipediaCollection != "" {
 		mode := "lexical"
 		if wikipediaEmbed != "" {

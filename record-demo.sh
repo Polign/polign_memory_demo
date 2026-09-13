@@ -2,7 +2,6 @@
 # Replays the whole demo script (four acts, including the kills and the cold
 # restart) with nobody typing, so it can be recorded:
 #
-#   ./run-demo.sh            # once beforehand, so the embedding model is cached
 #   asciinema rec demo.cast -c ./record-demo.sh
 #   agg --idle-time-limit 2 demo.cast demo.gif   # caps model-inference pauses
 #

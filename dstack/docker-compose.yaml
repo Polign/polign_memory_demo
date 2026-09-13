@@ -1,8 +1,7 @@
 name: polign-memory-dstack
 
 services:
-  # Polign publishes static binaries rather than a redistributable container.
-  # Download the official release for this CVM's architecture and verify the
+  # Download the official Recall-compatible release for this CVM's architecture and verify the
   # release digest before the database is allowed to start.
   polign-init:
     image: alpine:3.22.1@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1
@@ -13,11 +12,11 @@ services:
         case "$$(uname -m)" in
           x86_64)
             artifact=polign_db_linux_amd64.tar.gz
-            checksum=598419bdf46c242b426326e31ad7c43523c7f1ebe8397548fefd44afe400c6e7
+            checksum=ae1999931a08f4fc876984cc00416d71cc45cf5bc653ad7f4656cbbd9af19c15
             ;;
           aarch64|arm64)
             artifact=polign_db_linux_arm64.tar.gz
-            checksum=1cf1b88cb9839bd51978f07b957860045c42428cddf9719daffd809a0307d6a0
+            checksum=5d01dcab301c499ec19a2a782f88d1958a3243f538a363e73d7a84c3a382be5e
             ;;
           *)
             echo "Unsupported architecture: $$(uname -m)" >&2
@@ -28,12 +27,12 @@ services:
         mkdir -p /var/lib/polign/bin /var/lib/polign/cache /var/lib/polign/store
         chmod 0770 /var/lib/polign /var/lib/polign/cache /var/lib/polign/store
         wget -q -O /tmp/polign.tar.gz \
-          "https://github.com/Polign/polign/releases/download/v0.4.3/$${artifact}"
+          "https://github.com/Polign/polign/releases/download/v0.6.5/$${artifact}"
         echo "$${checksum}  /tmp/polign.tar.gz" | sha256sum -c -
         tar -xzf /tmp/polign.tar.gz -C /tmp polign-server
         mv /tmp/polign-server /var/lib/polign/bin/polign-server
         chmod 0555 /var/lib/polign/bin/polign-server
-        /var/lib/polign/bin/polign-server -version | grep -Fx 0.4.3
+        /var/lib/polign/bin/polign-server -version | grep -Fx 0.6.5
     volumes:
       - polign-data:/var/lib/polign
     cap_drop:
@@ -99,14 +98,12 @@ services:
       - http://polign:23000
       - -web
       - :8080
-      - -data-dir
-      - /var/lib/polign-memory/model
       - -model
       - ${MODEL:-claude-opus-5}
       - -provider
       - ${MODEL_PROVIDER:-anthropic}
       - -collection
-      - ${POLIGN_COLLECTION:-memories}
+      - ${POLIGN_COLLECTION:-recall_demo_lexical_v1}
       - -wikipedia-collection
       - ${WIKIPEDIA_COLLECTION:-wikipedia_bge}
       - -wikipedia-embed
@@ -115,6 +112,7 @@ services:
     environment:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      POLIGN_API_KEY: ${POLIGN_API_KEY:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
     depends_on:
       polign:

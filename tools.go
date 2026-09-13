@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/Polign/recall"
 	"sort"
+	"time"
 
 	"github.com/Polign/polign_memory_demo/memkit"
 )
@@ -60,10 +62,10 @@ func systemPrompt(registry memkit.Registry, wikipediaEnabled bool) string {
 	}
 	return `You are a personal assistant with a typed, durable memory store` + wikipediaIdentity + `.
 
-Memory is not text you paste into your context. It is a database of typed
-records, each one: kind (fact or preference), subject, predicate, value,
-confidence, source, status. The store enforces the schema; if a write is
-rejected, read the error and correct the call.
+Recall stores immutable assertions and withdrawals about subjects. It validates
+predicates and typed values and derives current beliefs from their history.
+If validation rejects a write, read the error and correct the call. A storage
+error can leave a write outcome uncertain; inspect history before retrying.
 
 Predicates are a closed registry, and each declares its value type. Pass
 values in that type: numbers as JSON numbers, booleans as JSON booleans,
@@ -91,7 +93,12 @@ Rules:
   the user asks about the past) instead of repeating the query with
   different flags.
 ` + wikipediaRules + `
-- Use forget only when the user explicitly asks you to forget something.
+- Use forget only when the user explicitly asks you to forget something. Pass
+  its typed value for a targeted withdrawal, or all: true to clear the pair.
+  Forgetting keeps history; never claim it permanently deletes data.
+- Use memory_history to inspect assertions and withdrawals. Treat historical
+  rows as past events, not current facts.
+- For multi-valued predicates, adding a value does not remove older values.
 - Do not store trivia from the conversation flow, only durable statements.
 - Keep replies short and conversational.`
 }
@@ -136,29 +143,35 @@ func toolSpecs(wikipediaEnabled bool) []toolSpec {
 		},
 		{
 			Name:        "recall",
-			Description: "Query the memory store. Pass query for an open-ended semantic search, or structural filters (subject, predicate, kind, min_confidence) for an exact lookup; both can be combined. Only active records return unless include_history is true.",
+			Description: "Query the memory store. Pass query for text search (word overlap by default), or structural filters (subject, predicate, kind, min_confidence) for an exact lookup; both can be combined. Current beliefs return by default. include_history shows the event log, including withdrawals; combine it only with subject/predicate filters.",
 			Properties: map[string]any{
-				"query":           map[string]any{"type": "string", "description": "Free-text semantic query (e.g. \"dev environment setup\")"},
+				"query":           map[string]any{"type": "string", "description": "Free-text query (word overlap by default; semantic search with the optional model embedder)"},
 				"subject":         map[string]any{"type": "string"},
 				"predicate":       map[string]any{"type": "string"},
 				"kind":            map[string]any{"type": "string", "enum": []string{"fact", "preference"}},
 				"min_confidence":  map[string]any{"type": "number"},
 				"value_min":       map[string]any{"type": "number", "description": "Lower bound on a number-typed value (compared numerically)"},
 				"value_max":       map[string]any{"type": "number", "description": "Upper bound on a number-typed value (compared numerically)"},
-				"include_history": map[string]any{"type": "boolean", "description": "Also return superseded records, with what replaced them"},
+				"as_of":           map[string]any{"type": "string", "description": "RFC3339 time for a historical answer"},
+				"include_history": map[string]any{"type": "boolean", "description": "Return assertions and withdrawals with active/historical/withdrawal labels"},
 			},
 		},
 		{
 			Name:        "forget",
-			Description: "Remove records for a subject and predicate from every future recall. With value set, only that record; without it, every record including history.",
+			Description: "Withdraw a current memory while preserving history. Pass a typed value or all: true. This is not permanent deletion.",
 			Properties: map[string]any{
 				"subject":   map[string]any{"type": "string"},
 				"predicate": map[string]any{"type": "string"},
-				"value":     map[string]any{"type": "string"},
+				"value":     map[string]any{"type": []string{"string", "number", "boolean"}},
+				"all":       map[string]any{"type": "boolean", "description": "Explicitly withdraw every current value for the pair; cannot be combined with value"},
 			},
 			Required: []string{"subject", "predicate"},
 		},
 	}
+	specs = append(specs,
+		toolSpec{Name: "memory_history", Description: "Read the full assertion and withdrawal history for a subject and predicate.", Properties: map[string]any{"subject": map[string]any{"type": "string"}, "predicate": map[string]any{"type": "string"}}, Required: []string{"subject", "predicate"}},
+		toolSpec{Name: "list_predicates", Description: "List the memory types and correction rules accepted by Recall.", Properties: map[string]any{}},
+	)
 	if wikipediaEnabled {
 		specs = append(specs, toolSpec{
 			Name:        "search_wikipedia",
@@ -190,11 +203,11 @@ type toolbox struct {
 
 // run executes one tool call, printing it and its result. Errors return as
 // (message, true) so the model can self-repair against the store's validation.
-func (tb *toolbox) run(name string, input []byte) (string, bool) {
+func (tb *toolbox) run(ctx context.Context, name string, input []byte) (string, bool) {
 	if tb.trace {
 		fmt.Printf("%s  %s→ %s(%s)%s\n", dim, cyan, name, compactJSON(input), reset)
 	}
-	result, isErr := tb.dispatch(name, input)
+	result, isErr := tb.dispatchContext(ctx, name, input)
 	if tb.trace {
 		marker := "←"
 		if isErr {
@@ -206,6 +219,10 @@ func (tb *toolbox) run(name string, input []byte) (string, bool) {
 }
 
 func (tb *toolbox) dispatch(name string, input []byte) (string, bool) {
+	return tb.dispatchContext(context.Background(), name, input)
+}
+
+func (tb *toolbox) dispatchContext(ctx context.Context, name string, input []byte) (string, bool) {
 	fail := func(err error) (string, bool) { return err.Error(), true }
 	ok := func(v any) (string, bool) {
 		raw, err := json.Marshal(v)
@@ -218,11 +235,11 @@ func (tb *toolbox) dispatch(name string, input []byte) (string, bool) {
 	switch name {
 	case "remember_fact", "remember_preference":
 		var in struct {
-			Subject    string  `json:"subject"`
-			Predicate  string  `json:"predicate"`
-			Value      any     `json:"value"`
-			Confidence float64 `json:"confidence"`
-			Source     string  `json:"source"`
+			Subject    string   `json:"subject"`
+			Predicate  string   `json:"predicate"`
+			Value      any      `json:"value"`
+			Confidence *float64 `json:"confidence"`
+			Source     string   `json:"source"`
 		}
 		if err := json.Unmarshal(input, &in); err != nil {
 			return fail(err)
@@ -231,7 +248,7 @@ func (tb *toolbox) dispatch(name string, input []byte) (string, bool) {
 		if name == "remember_preference" {
 			kind = "preference"
 		}
-		res, err := tb.store.Remember(kind, in.Subject, in.Predicate, in.Value, in.Confidence, in.Source)
+		res, err := tb.store.RememberContext(ctx, recall.RememberRequest{Kind: kind, Subject: in.Subject, Predicate: in.Predicate, Value: in.Value, Confidence: in.Confidence, Source: in.Source})
 		if err != nil {
 			return fail(err)
 		}
@@ -239,22 +256,23 @@ func (tb *toolbox) dispatch(name string, input []byte) (string, bool) {
 
 	case "recall":
 		var in struct {
-			Query          string   `json:"query"`
-			Subject        string   `json:"subject"`
-			Predicate      string   `json:"predicate"`
-			Kind           string   `json:"kind"`
-			MinConfidence  float64  `json:"min_confidence"`
-			ValueMin       *float64 `json:"value_min"`
-			ValueMax       *float64 `json:"value_max"`
-			IncludeHistory bool     `json:"include_history"`
+			Query          string    `json:"query"`
+			Subject        string    `json:"subject"`
+			Predicate      string    `json:"predicate"`
+			Kind           string    `json:"kind"`
+			MinConfidence  float64   `json:"min_confidence"`
+			ValueMin       *float64  `json:"value_min"`
+			ValueMax       *float64  `json:"value_max"`
+			IncludeHistory bool      `json:"include_history"`
+			AsOf           time.Time `json:"as_of"`
 		}
 		if err := json.Unmarshal(input, &in); err != nil {
 			return fail(err)
 		}
-		records, err := tb.store.Recall(memkit.RecallQuery{
+		records, err := tb.store.RecallContext(ctx, memkit.RecallQuery{
 			Query: in.Query, Subject: in.Subject, Predicate: in.Predicate,
 			Kind: in.Kind, MinConfidence: in.MinConfidence, IncludeHistory: in.IncludeHistory,
-			ValueMin: in.ValueMin, ValueMax: in.ValueMax,
+			ValueMin: in.ValueMin, ValueMax: in.ValueMax, AsOf: in.AsOf,
 		})
 		if err != nil {
 			return fail(err)
@@ -265,17 +283,33 @@ func (tb *toolbox) dispatch(name string, input []byte) (string, bool) {
 		var in struct {
 			Subject   string `json:"subject"`
 			Predicate string `json:"predicate"`
-			Value     string `json:"value"`
+			Value     any    `json:"value"`
+			All       bool   `json:"all"`
 		}
 		if err := json.Unmarshal(input, &in); err != nil {
 			return fail(err)
 		}
-		n, err := tb.store.Forget(in.Subject, in.Predicate, in.Value)
+		n, err := tb.store.ForgetContext(ctx, recall.ForgetRequest{Subject: in.Subject, Predicate: in.Predicate, Value: in.Value, All: in.All})
 		if err != nil {
 			return fail(err)
 		}
-		return ok(map[string]any{"deleted": n})
+		return ok(map[string]any{"withdrawn": n})
 
+	case "memory_history":
+		var in struct {
+			Subject   string `json:"subject"`
+			Predicate string `json:"predicate"`
+		}
+		if err := json.Unmarshal(input, &in); err != nil {
+			return fail(err)
+		}
+		events, err := tb.store.History(ctx, in.Subject, in.Predicate)
+		if err != nil {
+			return fail(err)
+		}
+		return ok(map[string]any{"count": len(events), "events": events})
+	case "list_predicates":
+		return ok(tb.store.Registry())
 	case "search_wikipedia":
 		if tb.wikipedia == nil {
 			return fail(fmt.Errorf("wikipedia search is not configured"))

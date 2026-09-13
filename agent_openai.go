@@ -83,7 +83,7 @@ func (a *openaiAgent) Turn(ctx context.Context, userText string) (AgentReply, er
 			return AgentReply{Text: msg.Content, RetrievedFrom: mapKeys(retrievedFrom)}, nil
 		}
 		for _, tc := range msg.ToolCalls {
-			result, isErr := a.tb.run(tc.Function.Name, []byte(tc.Function.Arguments))
+			result, isErr := a.tb.run(ctx, tc.Function.Name, []byte(tc.Function.Arguments))
 			if source := a.tb.retrievalSource(tc.Function.Name, isErr); source != "" {
 				retrievedFrom[source] = true
 			}

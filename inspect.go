@@ -1,6 +1,6 @@
 // The inspector is a read-only web page showing the memory store as one
 // table. It reads through Store.Recall, so it shows exactly what the agent
-// can see: active records plus superseded history, never tombstones. It is a
+// can see: current beliefs, historical assertions, and withdrawals. It is a
 // window, not a management surface; it serves a single GET and nothing else.
 package main
 
@@ -28,8 +28,8 @@ const inspectorHTML = `<!doctype html>
   th { color: #8a9095; text-align: left; font-weight: 600; }
   th, td { border-bottom: 1px solid #23272b; padding: 0.45rem 1rem 0.45rem 0; }
   td.num { font-variant-numeric: tabular-nums; }
-  tr.superseded td { text-decoration: line-through; opacity: 0.55; }
-  tr.superseded td.status { text-decoration: none; }
+  tr.historical td { text-decoration: line-through; opacity: 0.55; }
+  tr.historical td.status { text-decoration: none; }
   tr:target td { background: #16211d; }
   a { color: #35d0a0; text-decoration: none; }
   .empty { color: #8a9095; margin-top: 2rem; }
@@ -41,13 +41,13 @@ const inspectorHTML = `<!doctype html>
 <table>
 <tr><th>kind</th><th>subject</th><th>predicate</th><th>value</th><th>confidence</th><th>status</th></tr>
 {{range .Rows}}
-<tr id="{{.ID}}"{{if .Superseded}} class="superseded"{{end}}>
+<tr id="{{.ID}}"{{if .Historical}} class="historical"{{end}}>
 <td>{{.Kind}}</td>
 <td>{{.Subject}}</td>
 <td>{{.Predicate}}</td>
 <td>{{.Value}}</td>
 <td class="num">{{.Confidence}}</td>
-<td class="status">{{if .Superseded}}<a href="#{{.SupersededBy}}">superseded</a>{{else}}{{.Status}}{{end}}</td>
+<td class="status">{{.Status}}</td>
 </tr>
 {{end}}
 </table>
@@ -64,8 +64,8 @@ type inspectorRow struct {
 	ID, Kind, Subject, Predicate string
 	Value                        any
 	Confidence                   string
-	Status, SupersededBy         string
-	Superseded                   bool
+	Status                       string
+	Historical                   bool
 }
 
 type inspectorPage struct {
@@ -80,12 +80,12 @@ func inspectorHandler(store *memkit.Store, collection string) http.Handler {
 			http.NotFound(w, r)
 			return
 		}
-		records, err := store.Recall(memkit.RecallQuery{IncludeHistory: true, Limit: 1000})
+		records, err := store.RecallContext(r.Context(), memkit.RecallQuery{IncludeHistory: true, Limit: 1000})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
-		// A superseded row sorts directly above its replacement.
+		// Group events by subject and predicate, oldest first.
 		sort.Slice(records, func(i, j int) bool {
 			a, b := records[i], records[j]
 			if a.Subject != b.Subject {
@@ -101,8 +101,7 @@ func inspectorHandler(store *memkit.Store, collection string) http.Handler {
 			page.Rows = append(page.Rows, inspectorRow{
 				ID: rec.ID, Kind: rec.Kind, Subject: rec.Subject, Predicate: rec.Predicate,
 				Value: rec.Value, Confidence: fmt.Sprintf("%.2f", rec.Confidence),
-				Status: rec.Status, SupersededBy: rec.SupersededBy,
-				Superseded: rec.Status == "superseded",
+				Status: rec.Status, Historical: rec.Status == "historical",
 			})
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")

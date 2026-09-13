@@ -1,14 +1,127 @@
 {
-  "prefers_editor": {"cardinality": "single", "value_type": "string", "description": "The code editor this person prefers"},
-  "timezone": {"cardinality": "single", "value_type": "string", "description": "The timezone this person is in, e.g. America/Los_Angeles"},
-  "works_at": {"cardinality": "single", "value_type": "string", "description": "The company or organization this person currently works at"},
-  "lives_in": {"cardinality": "single", "value_type": "string", "description": "The city or place this person currently lives in"},
-  "favorite_color": {"cardinality": "single", "value_type": "string", "description": "This person's favorite color"},
-  "primary_language": {"cardinality": "single", "value_type": "string", "description": "The programming language this person mainly works in"},
-  "daily_step_goal": {"cardinality": "single", "value_type": "number", "description": "This person's daily step goal, as a number of steps"},
-  "uses_dark_mode": {"cardinality": "single", "value_type": "boolean", "description": "Whether this person uses dark mode"},
-  "likes": {"cardinality": "multi", "value_type": "string", "description": "Something this person likes"},
-  "dislikes": {"cardinality": "multi", "value_type": "string", "description": "Something this person dislikes"},
-  "owns": {"cardinality": "multi", "value_type": "string", "description": "Something this person owns"},
-  "working_on": {"cardinality": "multi", "value_type": "string", "description": "A project this person is working on"}
+  "prefers_editor": {
+    "cardinality": "single",
+    "value_type": "string",
+    "description": "The code editor this person prefers"
+  },
+  "timezone": {
+    "cardinality": "single",
+    "value_type": "string",
+    "description": "The timezone this person is in, e.g. America/Los_Angeles"
+  },
+  "works_at": {
+    "cardinality": "single",
+    "value_type": "string",
+    "description": "The company or organization this person currently works at"
+  },
+  "lives_in": {
+    "cardinality": "single",
+    "value_type": "string",
+    "description": "The city or place this person currently lives in"
+  },
+  "favorite_color": {
+    "cardinality": "single",
+    "value_type": "string",
+    "description": "This person's favorite color"
+  },
+  "primary_language": {
+    "cardinality": "single",
+    "value_type": "string",
+    "description": "The programming language this person mainly works in"
+  },
+  "daily_step_goal": {
+    "cardinality": "single",
+    "value_type": "number",
+    "description": "This person's daily step goal, as a number of steps"
+  },
+  "uses_dark_mode": {
+    "cardinality": "single",
+    "value_type": "boolean",
+    "description": "Whether this person uses dark mode"
+  },
+  "likes": {
+    "cardinality": "multi",
+    "value_type": "string",
+    "description": "Something this person likes"
+  },
+  "dislikes": {
+    "cardinality": "multi",
+    "value_type": "string",
+    "description": "Something this person dislikes"
+  },
+  "owns": {
+    "cardinality": "multi",
+    "value_type": "string",
+    "description": "Something this person owns"
+  },
+  "working_on": {
+    "cardinality": "multi",
+    "value_type": "string",
+    "description": "A project this person is working on"
+  },
+  "prefers_language": {
+    "cardinality": "single",
+    "value_type": "string",
+    "description": "Preferred programming language"
+  },
+  "prefers_response_style": {
+    "cardinality": "single",
+    "value_type": "string",
+    "description": "Preferred answer style, such as concise or detailed"
+  },
+  "prefers_test_framework": {
+    "cardinality": "single",
+    "value_type": "string",
+    "description": "Preferred testing framework"
+  },
+  "prefers_package_manager": {
+    "cardinality": "single",
+    "value_type": "string",
+    "description": "Preferred package manager"
+  },
+  "name": {
+    "cardinality": "single",
+    "value_type": "string",
+    "description": "Name the subject uses"
+  },
+  "pronouns": {
+    "cardinality": "single",
+    "value_type": "string",
+    "description": "Pronouns the subject uses"
+  },
+  "role": {
+    "cardinality": "single",
+    "value_type": "string",
+    "description": "Current professional or project role"
+  },
+  "project_name": {
+    "cardinality": "single",
+    "value_type": "string",
+    "description": "Project's name"
+  },
+  "repository_url": {
+    "cardinality": "single",
+    "value_type": "string",
+    "description": "Project's source repository URL"
+  },
+  "project_status": {
+    "cardinality": "single",
+    "value_type": "string",
+    "description": "Current project status"
+  },
+  "deployment_target": {
+    "cardinality": "single",
+    "value_type": "string",
+    "description": "Where the project is deployed"
+  },
+  "uses_technology": {
+    "cardinality": "multi",
+    "value_type": "string",
+    "description": "Technology used by the subject or project"
+  },
+  "project_constraint": {
+    "cardinality": "multi",
+    "value_type": "string",
+    "description": "An explicit project requirement or constraint"
+  }
 }

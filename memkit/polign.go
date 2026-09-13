@@ -17,13 +17,17 @@ import (
 // number written as a number comes back as one.
 type PolignClient struct {
 	base string
+	key  string
 	http *http.Client
 }
 
-func NewPolignClient(base string) *PolignClient {
+func NewPolignClient(base string) *PolignClient { return NewPolignClientWithKey(base, "") }
+
+func NewPolignClientWithKey(base, key string) *PolignClient {
 	return &PolignClient{
 		base: strings.TrimRight(base, "/"),
-		http: &http.Client{Timeout: 30 * time.Second},
+		key:  key,
+		http: &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 	}
 }
 
@@ -201,6 +205,9 @@ func (c *PolignClient) request(method, path string, body any) ([]byte, error) {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if c.key != "" {
+		req.Header.Set("Authorization", "Bearer "+c.key)
+	}
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("polign: %s %s: %w", method, path, err)

@@ -1,12 +1,16 @@
 package memkit
 
 import (
+	"context"
 	"encoding/json"
-	"fmt"
+	"github.com/Polign/recall"
+	recallpolign "github.com/Polign/recall/polign"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -81,7 +85,7 @@ func (f *fakePolign) handler() http.Handler {
 				IDs []string `json:"ids"`
 			}
 			_ = json.NewDecoder(r.Body).Decode(&in)
-			var out []StoredVector
+			out := make([]StoredVector, 0)
 			for _, id := range in.IDs {
 				if rec, ok := f.recs[id]; ok {
 					out = append(out, rec)
@@ -112,14 +116,22 @@ func (f *fakePolign) handler() http.Handler {
 				return
 			}
 			filter := parseFilter(r.URL.Query().Get("filter"))
-			var out []StoredVector
+			out := make([]StoredVector, 0)
 			for _, rec := range f.recs {
 				if f.matches(rec.Metadata, filter) {
 					out = append(out, rec)
 				}
 			}
 			sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
-			writeJSON(w, map[string]any{"vectors": out, "total": len(out)})
+			total := len(out)
+			offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+			limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+			offset = min(offset, len(out))
+			out = out[offset:]
+			if limit > 0 && len(out) > limit {
+				out = out[:limit]
+			}
+			writeJSON(w, map[string]any{"vectors": out, "total": total})
 
 		case strings.HasSuffix(path, "/query") && r.Method == http.MethodPost:
 			var in struct {
@@ -229,9 +241,14 @@ func newTestStore(t *testing.T) (*Store, *fakePolign) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := NewStore(NewPolignClient(srv.URL), "memories", registry, stubEmbed)
-	tick := 0
-	store.now = func() time.Time { tick++; return time.Unix(int64(1700000000+tick), 0) }
+	backend, err := recallpolign.New(recallpolign.Config{BaseURL: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(backend, "memories", registry, recall.EmbedFunc(func(ctx context.Context, text string) ([]float32, error) { return stubEmbed(text), ctx.Err() }))
+	if err != nil {
+		t.Fatal(err)
+	}
 	return store, fake
 }
 
@@ -280,46 +297,20 @@ func TestSingleValuedSupersedes(t *testing.T) {
 	}
 }
 
-func TestColdCollectionFallbackSupportsRecallAndSupersession(t *testing.T) {
+func TestIncompleteColdHistoryRefusesReadAndWrite(t *testing.T) {
 	store, fake := newTestStore(t)
-
 	if _, err := store.Remember("fact", "user", "lives_in", "Seattle", 0, ""); err != nil {
 		t.Fatal(err)
 	}
 	fake.coldList = true
-
-	recovered, err := store.Recall(RecallQuery{Subject: "user", Predicate: "lives_in"})
-	if err != nil {
-		t.Fatal(err)
+	if _, err := store.Recall(RecallQuery{Subject: "user", Predicate: "lives_in"}); err == nil {
+		t.Fatal("incomplete history must fail")
 	}
-	if len(recovered) != 1 || recovered[0].Value != "Seattle" {
-		t.Fatalf("cold recall = %+v, want active Seattle", recovered)
+	if _, err := store.Remember("fact", "user", "lives_in", "Portland", 0, ""); err == nil {
+		t.Fatal("write without complete history must fail")
 	}
-
-	updated, err := store.Remember("fact", "user", "lives_in", "Portland", 0, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(updated.Superseded) != 1 || updated.Superseded[0].Value != "Seattle" {
-		t.Fatalf("cold supersession = %+v, want Seattle superseded", updated)
-	}
-
-	history, err := store.Recall(RecallQuery{
-		Subject: "user", Predicate: "lives_in", IncludeHistory: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(history) != 2 {
-		t.Fatalf("cold history = %+v, want Seattle and Portland", history)
-	}
-
-	forgotten, err := store.Forget("user", "lives_in", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if forgotten != 2 {
-		t.Fatalf("cold forget removed %d records, want 2", forgotten)
+	if len(fake.recs) != 1 {
+		t.Fatal("failed write changed storage")
 	}
 }
 
@@ -446,7 +437,7 @@ func TestSemanticRecallFiltersSuperseded(t *testing.T) {
 	}
 }
 
-func TestForgetTombstones(t *testing.T) {
+func TestForgetAppendsRetraction(t *testing.T) {
 	store, fake := newTestStore(t)
 
 	if _, err := store.Remember("preference", "anup", "prefers_editor", "vim", 0, ""); err != nil {
@@ -462,18 +453,17 @@ func TestForgetTombstones(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != 2 {
-		t.Fatalf("forget should cover the history too, forgot %d", n)
+	if n != 1 {
+		t.Fatalf("forget should withdraw one current belief, got %d", n)
 	}
-	// A tombstone is a write, not a delete: the records stay in the store.
-	if len(fake.recs) != 3 {
-		t.Fatalf("tombstoned records should still exist, store has %d", len(fake.recs))
+	// A withdrawal appends an event and preserves the earlier assertions.
+	if len(fake.recs) != 4 {
+		t.Fatalf("expected three assertions and a retraction, got %d", len(fake.recs))
 	}
 
-	// But no recall mode surfaces them, semantic included.
+	// Current exact and search results exclude the withdrawn preference.
 	for _, q := range []RecallQuery{
 		{Subject: "anup", Predicate: "prefers_editor"},
-		{Subject: "anup", Predicate: "prefers_editor", IncludeHistory: true},
 		{Query: "anup prefers editor neovim", Subject: "anup", Predicate: "prefers_editor"},
 	} {
 		records, err := store.Recall(q)
@@ -677,16 +667,75 @@ func TestForgetParsesTypedValues(t *testing.T) {
 	}
 }
 
-func TestRecordIDStableAndValueCaseInsensitive(t *testing.T) {
-	a := recordID("anup", "prefers_editor", "Neovim")
-	b := recordID("anup", "prefers_editor", "neovim")
-	if a != b {
-		t.Error("record id should ignore value case")
+func TestReassertionHasNewEventAndPreservesOldRecord(t *testing.T) {
+	store, fake := newTestStore(t)
+	first, err := store.Remember("preference", "user", "prefers_editor", "vim", 1, "")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if recordID("anup", "prefers_editor", "vim") == a {
-		t.Error("different values must give different ids")
+	original := fake.recs[first.Stored.ID]
+	if _, err := store.Forget("user", "prefers_editor", "vim"); err != nil {
+		t.Fatal(err)
 	}
-	if fmt.Sprintf("%s", a)[:2] != "m-" {
-		t.Errorf("unexpected id shape %q", a)
+	next, err := store.Remember("preference", "user", "prefers_editor", "vim", 1, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.Stored.ID == first.Stored.ID {
+		t.Fatal("reassertion overwrote the earlier event")
+	}
+	if !reflect.DeepEqual(original, fake.recs[first.Stored.ID]) {
+		t.Fatal("old assertion was changed")
+	}
+	history, err := store.Recall(RecallQuery{Subject: "user", Predicate: "prefers_editor", IncludeHistory: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 3 || history[0].Status != "historical" || history[1].Status != "withdrawal" || history[2].Status != "active" {
+		t.Fatalf("history: %+v", history)
+	}
+}
+
+func TestLegacyRowsAreRejectedWithoutBeingRewritten(t *testing.T) {
+	store, fake := newTestStore(t)
+	old := StoredVector{ID: "old", Values: []float32{1}, Metadata: map[string]any{"subject": "user", "predicate": "prefers_editor", "status": "superseded", "value": "vim"}}
+	fake.recs[old.ID] = old
+	if err := store.Check(t.Context()); err == nil || !strings.Contains(err.Error(), "legacy memkit") {
+		t.Fatalf("legacy startup: %v", err)
+	}
+	if _, err := store.Remember("preference", "user", "prefers_editor", "neovim", 1, ""); err == nil {
+		t.Fatal("legacy history allowed a write")
+	}
+	if len(fake.recs) != 1 || !reflect.DeepEqual(fake.recs[old.ID], old) {
+		t.Fatal("legacy collection changed")
+	}
+}
+
+func TestHistoryUsesRecallAsOfAndKeepsWithdrawals(t *testing.T) {
+	store, _ := newTestStore(t)
+	first, err := store.Remember("preference", "user", "prefers_editor", "vim", 1, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Remember("preference", "user", "prefers_editor", "neovim", 1, ""); err != nil {
+		t.Fatal(err)
+	}
+	at, err := time.Parse(time.RFC3339Nano, first.Stored.ObservedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := store.Recall(RecallQuery{Subject: "user", Predicate: "prefers_editor", AsOf: at})
+	if err != nil || len(rows) != 1 || rows[0].Value != "vim" {
+		t.Fatalf("as-of: %+v, %v", rows, err)
+	}
+	if _, err := store.Forget("user", "prefers_editor", ""); err != nil {
+		t.Fatal(err)
+	}
+	rows, err = store.Recall(RecallQuery{Subject: "user", Predicate: "prefers_editor", IncludeHistory: true})
+	if err != nil || len(rows) != 3 || rows[2].Status != "withdrawal" {
+		t.Fatalf("withdrawal: %+v, %v", rows, err)
+	}
+	if _, err := store.Recall(RecallQuery{IncludeHistory: true, Limit: 1}); err == nil {
+		t.Fatal("inspector silently truncated history")
 	}
 }

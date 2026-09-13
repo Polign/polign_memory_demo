@@ -1,6 +1,9 @@
 package main
 
 import (
+	"context"
+	"github.com/Polign/recall"
+	recallpolign "github.com/Polign/recall/polign"
 	"os"
 	"testing"
 	"time"
@@ -58,7 +61,19 @@ func itStore(t *testing.T) *memkit.Store {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return memkit.NewStore(db, "it-memories", registry, stubEmbed)
+	backend, err := recallpolign.New(recallpolign.Config{BaseURL: url, APIKey: os.Getenv("POLIGN_API_KEY")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	collection := os.Getenv("POLIGN_MEMORY_TEST_COLLECTION")
+	if collection == "" {
+		collection = "it-recall-v1"
+	}
+	store, err := memkit.NewStore(backend, collection, registry, recall.EmbedFunc(func(ctx context.Context, text string) ([]float32, error) { return stubEmbed(text), ctx.Err() }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store
 }
 
 func TestIntegrationWrite(t *testing.T) {
@@ -161,8 +176,8 @@ func TestIntegrationWriteAfterRestart(t *testing.T) {
 		t.Fatalf("history should hold vim, neovim, and helix, got %+v", history)
 	}
 	for _, rec := range history {
-		if rec.Value == "neovim" && (rec.Status != "superseded" || rec.SupersededBy != active[0].ID) {
-			t.Fatalf("neovim record not linked to its replacement: %+v", rec)
+		if rec.Value == "neovim" && rec.Status != "historical" {
+			t.Fatalf("neovim event should remain historical: %+v", rec)
 		}
 	}
 
@@ -200,8 +215,8 @@ func assertMemoryState(t *testing.T, store *memkit.Store) {
 		t.Fatalf("history should hold vim and neovim, got %+v", history)
 	}
 	for _, rec := range history {
-		if rec.Value == "vim" && (rec.Status != "superseded" || rec.SupersededBy != active[0].ID) {
-			t.Fatalf("vim record not linked to its replacement: %+v", rec)
+		if rec.Value == "vim" && rec.Status != "historical" {
+			t.Fatalf("vim event should remain historical: %+v", rec)
 		}
 	}
 
