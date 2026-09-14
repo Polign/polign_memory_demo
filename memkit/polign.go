@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -24,11 +25,79 @@ type PolignClient struct {
 func NewPolignClient(base string) *PolignClient { return NewPolignClientWithKey(base, "") }
 
 func NewPolignClientWithKey(base, key string) *PolignClient {
+	return NewPolignClientWithTransport(base, key, nil)
+}
+
+// NewPolignClientWithTransport lets a caller observe or shape the HTTP
+// exchange, for example to record write receipts with TokenTransport. A nil
+// transport uses the default.
+func NewPolignClientWithTransport(base, key string, rt http.RoundTripper) *PolignClient {
 	return &PolignClient{
 		base: strings.TrimRight(base, "/"),
 		key:  key,
-		http: &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
+		http: NewHTTPClient(rt),
 	}
+}
+
+// NewHTTPClient builds the client every demo caller uses: a 30-second
+// timeout and no redirect following, so a misconfigured endpoint fails
+// instead of quietly talking to somewhere else.
+func NewHTTPClient(rt http.RoundTripper) *http.Client {
+	return &http.Client{Transport: rt, Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+}
+
+// WriteTokens remembers the newest write receipt a caller has seen. A polign
+// node returns one on every mutation (X-Polign-Write-Token); handing it back
+// on a read (X-Polign-Require-Write-Token) makes that node wait until it has
+// replayed the write log past that point. That is what lets a second node on
+// the same store answer read-your-writes for a write the first node took.
+type WriteTokens struct {
+	mu     sync.Mutex
+	latest string
+}
+
+// Observe records a receipt. Empty receipts are ignored.
+func (t *WriteTokens) Observe(token string) {
+	if token == "" {
+		return
+	}
+	t.mu.Lock()
+	t.latest = token
+	t.mu.Unlock()
+}
+
+// Latest returns the most recent receipt, or "" when nothing was written yet.
+func (t *WriteTokens) Latest() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.latest
+}
+
+const (
+	writeTokenHeader        = "X-Polign-Write-Token"
+	requireWriteTokenHeader = "X-Polign-Require-Write-Token"
+)
+
+// TokenTransport records every write receipt a response carries into tokens.
+// A nil base uses http.DefaultTransport.
+func TokenTransport(tokens *WriteTokens, base http.RoundTripper) http.RoundTripper {
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	return tokenTransport{tokens: tokens, base: base}
+}
+
+type tokenTransport struct {
+	tokens *WriteTokens
+	base   http.RoundTripper
+}
+
+func (t tokenTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.base.RoundTrip(req)
+	if err == nil {
+		t.tokens.Observe(resp.Header.Get(writeTokenHeader))
+	}
+	return resp, err
 }
 
 // StoredVector is one record as the server returns it.
@@ -179,6 +248,56 @@ func (c *PolignClient) Delete(collection, id string) (bool, error) {
 		return false, fmt.Errorf("polign: parse delete response: %w", err)
 	}
 	return out.Deleted, nil
+}
+
+// DeleteMany removes records by id in one call and returns how many ids the
+// server acknowledged. Ids the caller cannot see (another namespace's, or
+// already gone) are simply absent from the answer.
+func (c *PolignClient) DeleteMany(collection string, ids []string) (int, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	path := fmt.Sprintf("/v1/collections/%s/vectors:delete", seg(collection))
+	raw, err := c.request(http.MethodPost, path, map[string]any{"ids": ids})
+	if err != nil {
+		return 0, err
+	}
+	var out struct {
+		IDs []string `json:"ids"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return 0, fmt.Errorf("polign: parse vectors:delete response: %w", err)
+	}
+	return len(out.IDs), nil
+}
+
+// Barrier blocks until this node has replayed the write log past token, so a
+// following list or search on the same node sees that write. It is a point
+// read of an id that does not exist: the server applies the freshness wait
+// before the lookup, and the resulting 404 is the expected answer. An empty
+// token returns immediately.
+func (c *PolignClient) Barrier(collection, token string) error {
+	if token == "" {
+		return nil
+	}
+	req, err := http.NewRequest(http.MethodGet, c.base+fmt.Sprintf("/v1/collections/%s/vectors/%s", seg(collection), seg("__barrier__")), nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set(requireWriteTokenHeader, token)
+	if c.key != "" {
+		req.Header.Set("Authorization", "Bearer "+c.key)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("polign: barrier: %w", err)
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	return fmt.Errorf("polign: barrier: HTTP %d", resp.StatusCode)
 }
 
 // Healthy reports whether the server answers /healthz.

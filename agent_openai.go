@@ -46,6 +46,8 @@ func newOpenAIAgent(model string, store *memkit.Store, wikipedia wikipediaSource
 
 func (a *openaiAgent) Reset() { a.messages = nil }
 
+func (a *openaiAgent) setTraceSink(sink func(TraceEvent)) { a.tb.sink = sink }
+
 func (a *openaiAgent) Turn(ctx context.Context, userText string) (AgentReply, error) {
 	a.messages = append(a.messages, openai.UserMessage(userText))
 	retrievedFrom := make(map[string]bool)

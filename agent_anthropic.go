@@ -43,6 +43,8 @@ func newAnthropicAgent(model string, store *memkit.Store, wikipedia wikipediaSou
 
 func (a *anthropicAgent) Reset() { a.messages = nil }
 
+func (a *anthropicAgent) setTraceSink(sink func(TraceEvent)) { a.tb.sink = sink }
+
 func (a *anthropicAgent) Turn(ctx context.Context, userText string) (AgentReply, error) {
 	a.messages = append(a.messages, anthropic.NewUserMessage(anthropic.NewTextBlock(userText)))
 	retrievedFrom := make(map[string]bool)

@@ -1,0 +1,12 @@
+# Inside the demo.polign.com site block, replacing the bare reverse_proxy.
+# /memory/* reaches the hosted memory demo API; everything else stays with
+# the Wikipedia demo. flush_interval -1 lets the turn stream (server-sent
+# events) through as it happens instead of after the turn ends.
+	handle_path /memory/* {
+		reverse_proxy 127.0.0.1:23300 {
+			flush_interval -1
+		}
+	}
+	handle {
+		reverse_proxy 127.0.0.1:23100
+	}

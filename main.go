@@ -35,6 +35,17 @@ func main() {
 	inspectAddr := flag.String("inspect", "", "serve a read-only inspector page at this address (e.g. 127.0.0.1:24102)")
 	webAddr := flag.String("web", "", "serve the chat UI and memory inspector at this address instead of using the terminal (e.g. :8080)")
 	traceTools := flag.Bool("trace", true, "print tool inputs and results; disable when deployment logs are public")
+	var hosted hostedOptions
+	flag.StringVar(&hosted.Addr, "hosted", "", "serve the multi-visitor hosted demo (the polign.com live demo) at this address instead of a terminal or single-user web UI (e.g. 127.0.0.1:23300)")
+	flag.StringVar(&hosted.Nodes, "hosted-nodes", "http://127.0.0.1:23400,http://127.0.0.1:23402", "comma-separated polign_db nodes sharing one store; each visitor gets one agent per node")
+	flag.StringVar(&hosted.Issuer, "hosted-issuer", "", "OpenID issuer of the sign-in ID tokens, e.g. https://cognito-idp.us-east-1.amazonaws.com/us-east-1_xxxx")
+	flag.StringVar(&hosted.Audience, "hosted-audience", "", "audience (app client id) the ID tokens must carry")
+	flag.StringVar(&hosted.Origins, "hosted-origins", "https://polign.com,https://www.polign.com", "comma-separated browser origins allowed to call the hosted API")
+	flag.StringVar(&hosted.KeyFile, "hosted-key-file", "", "file caching the per-namespace polign_db API keys this process mints (owner-only permissions)")
+	flag.StringVar(&hosted.KeyStore, "hosted-key-store", "", "object-store spec the nodes run on, used to mint namespaced keys with polign-apikey")
+	flag.StringVar(&hosted.APIKeyBin, "hosted-apikey", "polign-apikey", "polign-apikey binary used to mint namespaced keys")
+	flag.IntVar(&hosted.TurnsPerHour, "hosted-turns-per-hour", 30, "model turns one visitor may take per hour across both agents")
+	flag.IntVar(&hosted.MaxConcurrent, "hosted-max-concurrent", 4, "model turns in flight at once across all visitors")
 	flag.Parse()
 
 	if *collection == "" {
@@ -43,7 +54,7 @@ func main() {
 			*collection = "recall_demo_model_v1"
 		}
 	}
-	if err := run(*memoryEmbed, *polignURL, *collection, *wikipediaCollection, *wikipediaEmbed, *wikipediaEmbedDim, *wikipediaNProbe, *model, *provider, *dataDir, *dataURL, *predicatesPath, *scriptPath, *inspectAddr, *webAddr, *traceTools); err != nil {
+	if err := run(*memoryEmbed, *polignURL, *collection, *wikipediaCollection, *wikipediaEmbed, *wikipediaEmbedDim, *wikipediaNProbe, *model, *provider, *dataDir, *dataURL, *predicatesPath, *scriptPath, *inspectAddr, *webAddr, *traceTools, hosted); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
@@ -59,7 +70,13 @@ func inferProvider(model string) string {
 	return "anthropic"
 }
 
-func run(memoryEmbed, polignURL, collection, wikipediaCollection, wikipediaEmbed string, wikipediaEmbedDim, wikipediaNProbe int, model, provider, dataDir, dataURL, predicatesPath, scriptPath, inspectAddr, webAddr string, traceTools bool) error {
+// hostedOptions carries the -hosted-* flags.
+type hostedOptions struct {
+	Addr, Nodes, Issuer, Audience, Origins, KeyFile, KeyStore, APIKeyBin string
+	TurnsPerHour, MaxConcurrent                                          int
+}
+
+func run(memoryEmbed, polignURL, collection, wikipediaCollection, wikipediaEmbed string, wikipediaEmbedDim, wikipediaNProbe int, model, provider, dataDir, dataURL, predicatesPath, scriptPath, inspectAddr, webAddr string, traceTools bool, hosted hostedOptions) error {
 	logf := func(format string, args ...any) { fmt.Printf(dim+format+reset+"\n", args...) }
 	collection = strings.TrimSpace(collection)
 	wikipediaCollection = strings.TrimSpace(wikipediaCollection)
@@ -114,6 +131,18 @@ func run(memoryEmbed, polignURL, collection, wikipediaCollection, wikipediaEmbed
 	if !db.Healthy() {
 		return fmt.Errorf("no polign_db server at %s (start one with: polign-server -store fs:./demo-bucket -http 127.0.0.1:24100)", polignURL)
 	}
+	if provider == "" {
+		provider = inferProvider(model)
+	}
+	if hosted.Addr != "" {
+		// In hosted mode -polign is only the knowledge node; memory lives on
+		// the -hosted-nodes, one namespace per visitor.
+		var wikipedia wikipediaSource
+		if wikipediaCollection != "" {
+			wikipedia = newWikipediaSearch(db, wikipediaCollection, wikipediaEmbed, wikipediaEmbedDim, wikipediaNProbe)
+		}
+		return runHosted(hosted, collection, registry, embedder, wikipedia, model, provider)
+	}
 
 	backend, err := recallpolign.New(recallpolign.Config{BaseURL: polignURL, APIKey: os.Getenv("POLIGN_API_KEY")})
 	if err != nil {
@@ -140,9 +169,6 @@ func run(memoryEmbed, polignURL, collection, wikipediaCollection, wikipediaEmbed
 		logf("inspector: http://%s", inspectAddr)
 	}
 
-	if provider == "" {
-		provider = inferProvider(model)
-	}
 	if webAddr != "" {
 		var credential string
 		switch provider {
@@ -201,6 +227,69 @@ func run(memoryEmbed, polignURL, collection, wikipediaCollection, wikipediaEmbed
 		return err
 	}
 	return scanErr
+}
+
+// runHosted wires the hosted server from flags: Cognito token verification,
+// per-namespace keys minted through polign-apikey, and a fresh agent per seat.
+func runHosted(o hostedOptions, collection string, registry memkit.Registry, embedder recall.Embedder, wikipedia wikipediaSource, model, provider string) error {
+	switch provider {
+	case "anthropic":
+		if os.Getenv("ANTHROPIC_API_KEY") == "" {
+			return fmt.Errorf("ANTHROPIC_API_KEY is required in hosted mode")
+		}
+	case "openai":
+		if os.Getenv("OPENAI_API_KEY") == "" {
+			return fmt.Errorf("OPENAI_API_KEY is required in hosted mode")
+		}
+	default:
+		return fmt.Errorf("unknown provider %q (want anthropic or openai)", provider)
+	}
+	if o.KeyStore == "" || o.KeyFile == "" {
+		return fmt.Errorf("hosted mode needs -hosted-key-store and -hosted-key-file")
+	}
+	verifier, err := newTokenVerifier(o.Issuer, o.Audience, nil)
+	if err != nil {
+		return err
+	}
+	keys, err := loadKeyring(o.KeyFile, apikeyCommand{bin: o.APIKeyBin, store: o.KeyStore})
+	if err != nil {
+		return err
+	}
+	var nodes []string
+	for _, node := range strings.Split(o.Nodes, ",") {
+		if node = strings.TrimSpace(node); node != "" {
+			if !memkit.NewPolignClient(node).Healthy() {
+				return fmt.Errorf("no polign_db server at %s", node)
+			}
+			nodes = append(nodes, node)
+		}
+	}
+	var origins []string
+	for _, origin := range strings.Split(o.Origins, ",") {
+		if origin = strings.TrimSpace(origin); origin != "" {
+			origins = append(origins, origin)
+		}
+	}
+	newAgent := func(store *memkit.Store, wikipedia wikipediaSource) Agent {
+		if provider == "openai" {
+			return newOpenAIAgent(model, store, wikipedia, false)
+		}
+		return newAnthropicAgent(model, store, wikipedia, false)
+	}
+	server, err := newHostedServer(hostedConfig{
+		Origins: origins, Nodes: nodes, Collection: collection, Registry: registry, Embedder: embedder,
+		Wikipedia: wikipedia, NewAgent: newAgent, Label: labelForProvider(provider), Model: model,
+		Verify: verifier.Verify, Keys: keys, TurnsPerHour: o.TurnsPerHour, MaxConcurrent: o.MaxConcurrent,
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Recall memory demo, hosted: %s (%s), memory %q on %s", model, provider, collection, strings.Join(nodes, " and "))
+	if wikipedia != nil {
+		fmt.Printf(", Wikipedia %q", wikipedia.Collection())
+	}
+	fmt.Printf("\nhosted API: http://%s\n", o.Addr)
+	return serveHosted(o.Addr, server)
 }
 
 func labelForProvider(provider string) string {

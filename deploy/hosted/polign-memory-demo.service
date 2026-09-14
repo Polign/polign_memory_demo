@@ -1,0 +1,59 @@
+[Unit]
+Description=polign agent memory demo (hosted API behind polign.com/memory-demo)
+Documentation=https://github.com/Polign/polign_memory_demo
+After=network-online.target polign-memory-node-a.service polign-memory-node-b.service polign-node.service polign-embedserve.service
+Wants=network-online.target polign-memory-node-a.service polign-memory-node-b.service
+
+[Service]
+Type=simple
+User=polign
+Group=polign
+
+# /etc/polign/memory-demo.env holds OPENAI_API_KEY (root:polign, 0640).
+# Nothing else in this unit is secret.
+EnvironmentFile=/etc/polign/memory-demo.env
+Environment=GOMEMLIMIT=200MiB
+Environment=AWS_REGION=us-west-1
+
+# -hosted-issuer / -hosted-audience: the Cognito user pool and app client
+# behind account.polign.com. The page signs in there and sends the ID token;
+# this process verifies it against the pool's published keys and derives a
+# namespace from the account subject.
+#
+# -hosted-key-store must be the same prefix the memory nodes run on: that is
+# where polign-apikey writes the per-namespace key records the nodes read.
+#
+# -polign points at the read-only Wikipedia node, which the agents use for
+# general-knowledge questions through the BGE sidecar. Memory never goes there.
+#
+# -trace=false keeps visitors' tool inputs out of the journal; the browser
+# terminal shows them to the visitor instead.
+ExecStart=/opt/polign/bin/polign-memory-demo \
+    -hosted 127.0.0.1:23300 \
+    -hosted-nodes http://127.0.0.1:23400,http://127.0.0.1:23402 \
+    -hosted-issuer https://cognito-idp.us-east-1.amazonaws.com/us-east-1_eDB5WomyV \
+    -hosted-audience 2u8blo7ld5ft0hvp222tamill9 \
+    -hosted-origins https://polign.com,https://www.polign.com \
+    -hosted-key-store s3://polign-demo-wiki-en-uw1/memory-live \
+    -hosted-key-file /var/lib/polign/memory-demo/keys.json \
+    -hosted-apikey /opt/polign/bin/polign-apikey-0.6.6 \
+    -hosted-turns-per-hour 30 \
+    -hosted-max-concurrent 4 \
+    -polign http://127.0.0.1:23000 \
+    -wikipedia-collection wikipedia_bge \
+    -wikipedia-embed http://127.0.0.1:23200 \
+    -model gpt-5 \
+    -trace=false
+
+Restart=always
+RestartSec=5s
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/polign
+StateDirectory=polign
+
+[Install]
+WantedBy=multi-user.target

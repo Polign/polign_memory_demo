@@ -127,6 +127,19 @@ loads the demo's existing small local model, downloading it on first use. Its
 default collection is `recall_demo_model_v1`. Keep lexical and model embeddings
 in separate collections; changing the embedder does not migrate stored vectors.
 
+## Hosted demo on polign.com
+
+`-hosted` serves the demo to many visitors at once behind the polign.com
+sign-in; it is what runs at <https://polign.com/memory-demo>. Each visitor
+signs in with their Polign account, the backend verifies the ID token, derives
+a namespace from the account, and mints a polign_db key bound to that
+namespace. Two agents then share that namespace through two separate
+cold-first nodes on one bucket prefix, so a memory one agent stores reaches
+the other only through the store. The browser page streams every tool call as
+it happens and can reset either conversation or the whole namespace.
+[deploy/hosted](deploy/hosted/) holds the units, the Caddy route, and the
+install steps.
+
 ## Deployment and tests
 
 The [dstack deployment](dstack/) runs the agent, an authenticated browser UI,

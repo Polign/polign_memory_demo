@@ -193,27 +193,51 @@ func (tb *toolbox) retrievalSource(toolName string, isErr bool) string {
 	return tb.wikipedia.Collection()
 }
 
+// TraceEvent is one line of the tool trace: a call going out, or a result
+// (or error) coming back. The terminal prints them; the hosted web UI streams
+// them so a browser terminal shows the same machinery.
+type TraceEvent struct {
+	Kind    string `json:"kind"` // "call", "result", or "error"
+	Tool    string `json:"tool"`
+	Payload string `json:"payload"`
+}
+
 // toolbox runs tool calls against the store and prints the trace both agents
 // share.
 type toolbox struct {
 	store     *memkit.Store
 	wikipedia wikipediaSource
 	trace     bool
+	// sink, when set, receives every trace event in order. It runs on the
+	// agent's goroutine, so it must not block for long.
+	sink func(TraceEvent)
 }
 
 // run executes one tool call, printing it and its result. Errors return as
 // (message, true) so the model can self-repair against the store's validation.
 func (tb *toolbox) run(ctx context.Context, name string, input []byte) (string, bool) {
+	call := compactJSON(input)
 	if tb.trace {
-		fmt.Printf("%s  %s→ %s(%s)%s\n", dim, cyan, name, compactJSON(input), reset)
+		fmt.Printf("%s  %s→ %s(%s)%s\n", dim, cyan, name, call, reset)
+	}
+	if tb.sink != nil {
+		tb.sink(TraceEvent{Kind: "call", Tool: name, Payload: call})
 	}
 	result, isErr := tb.dispatchContext(ctx, name, input)
+	out := compactJSON([]byte(result))
 	if tb.trace {
 		marker := "←"
 		if isErr {
 			marker = "← error:"
 		}
-		fmt.Printf("%s  %s %s%s\n", dim, marker, compactJSON([]byte(result)), reset)
+		fmt.Printf("%s  %s %s%s\n", dim, marker, out, reset)
+	}
+	if tb.sink != nil {
+		kind := "result"
+		if isErr {
+			kind = "error"
+		}
+		tb.sink(TraceEvent{Kind: kind, Tool: name, Payload: out})
 	}
 	return result, isErr
 }
