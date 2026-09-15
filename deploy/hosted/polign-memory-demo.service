@@ -26,6 +26,11 @@ Environment=AWS_REGION=us-west-1
 # -polign points at the read-only Wikipedia node, which the agents use for
 # general-knowledge questions through the BGE sidecar. Memory never goes there.
 #
+# -collection: a name of its own on this prefix. A collection's vector width
+# is fixed by its first write, so it must only ever see the lexical
+# embedder's 256-wide vectors; recall_demo_lexical_v1 here was created 3-wide
+# by a smoke test and is left empty.
+#
 # -trace=false keeps visitors' tool inputs out of the journal; the browser
 # terminal shows them to the visitor instead.
 ExecStart=/opt/polign/bin/polign-memory-demo \
@@ -39,6 +44,7 @@ ExecStart=/opt/polign/bin/polign-memory-demo \
     -hosted-apikey /opt/polign/bin/polign-apikey-0.6.6 \
     -hosted-turns-per-hour 30 \
     -hosted-max-concurrent 4 \
+    -collection memdemo_lexical_v1 \
     -polign http://127.0.0.1:23000 \
     -wikipedia-collection wikipedia_bge \
     -wikipedia-embed http://127.0.0.1:23200 \
