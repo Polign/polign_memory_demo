@@ -5,7 +5,7 @@ This is what runs behind <https://polign.com/memory-demo>. It shares the
 
 | unit | listens on | what it is |
 | --- | --- | --- |
-| `polign-memory-node-a` | 127.0.0.1:23400 | polign_db 0.7.3, cold-first, on `s3://polign-demo-wiki-en-uw1/memory-live` |
+| `polign-memory-node-a` | 127.0.0.1:23400 | polign_db 0.7.4, cold-first, on `s3://polign-demo-wiki-en-uw1/memory-live` |
 | `polign-memory-node-b` | 127.0.0.1:23402 | a second node on the same prefix |
 | `polign-memory-demo` | 127.0.0.1:23300 | this repository in `-hosted` mode |
 
@@ -20,9 +20,9 @@ namespace.
 ## Install
 
 ```sh
-# binaries: polign_db v0.7.3 with verified signed checksums, this repo cross-compiled
-sudo install -m 0755 polign-server /opt/polign/bin/polign-server-0.7.3
-sudo install -m 0755 polign-apikey /opt/polign/bin/polign-apikey-0.7.3
+# binaries: polign_db v0.7.4 with verified signed checksums, this repo cross-compiled
+sudo install -m 0755 polign-server /opt/polign/bin/polign-server-0.7.4
+sudo install -m 0755 polign-apikey /opt/polign/bin/polign-apikey-0.7.4
 sudo install -m 0755 polign-memory-demo /opt/polign/bin/polign-memory-demo
 
 sudo install -d -o polign -g polign -m 0750 /var/lib/polign/memory-a /var/lib/polign/memory-b /var/lib/polign/memory-demo
