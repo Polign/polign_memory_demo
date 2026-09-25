@@ -20,8 +20,8 @@ jobs:
       - run: go vet ./...
       - name: Download pinned test server
         run: |
-          curl -fsSL https://github.com/Polign/polign/releases/download/v0.7.1/polign_db_linux_amd64.tar.gz -o "$RUNNER_TEMP/polign.tar.gz"
-          echo "b99d35303ad39f300878be01b475ce2ebce8533a393dc5946e8a458222096e57  $RUNNER_TEMP/polign.tar.gz" | sha256sum -c -
+          curl -fsSL https://github.com/Polign/polign/releases/download/v0.7.3/polign_db_linux_amd64.tar.gz -o "$RUNNER_TEMP/polign.tar.gz"
+          echo "0bbd086a9a6d91e6be1bc844546473688852c4cc38914d09b3c2285c306ed313  $RUNNER_TEMP/polign.tar.gz" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/polign.tar.gz" -C "$RUNNER_TEMP" polign-server
       - name: Recall recovery after a server crash
         run: python tests/restart.py "$RUNNER_TEMP/polign-server"
