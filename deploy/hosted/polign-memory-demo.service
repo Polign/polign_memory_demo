@@ -41,7 +41,7 @@ ExecStart=/opt/polign/bin/polign-memory-demo \
     -hosted-origins https://polign.com,https://www.polign.com \
     -hosted-key-store s3://polign-demo-wiki-en-uw1/memory-live \
     -hosted-key-file /var/lib/polign/memory-demo/keys.json \
-    -hosted-apikey /opt/polign/bin/polign-apikey-0.7.1 \
+    -hosted-apikey /opt/polign/bin/polign-apikey-0.7.3 \
     -hosted-turns-per-hour 30 \
     -hosted-max-concurrent 4 \
     -collection memdemo_lexical_v1 \
