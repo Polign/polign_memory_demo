@@ -27,7 +27,7 @@ Group=polign
 # of the Wikipedia node on the same 2 GB box.
 Environment=GOMEMLIMIT=200MiB
 Environment=AWS_REGION=us-west-1
-ExecStart=/opt/polign/bin/polign-server-0.6.7 \
+ExecStart=/opt/polign/bin/polign-server-0.7.1 \
     -telemetry-id-file /var/lib/polign/memory-b/telemetry-install-id \
     -store s3://polign-demo-wiki-en-uw1/memory-live \
     -cold-first \
