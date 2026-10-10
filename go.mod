@@ -1,10 +1,10 @@
 module github.com/Polign/polign_memory_demo
 
-go 1.25
+go 1.25.0
 
 require (
-	github.com/Polign/recall v0.4.0
-	github.com/anthropics/anthropic-sdk-go v1.66.0
+	github.com/Polign/recall v0.14.0
+	github.com/anthropics/anthropic-sdk-go v1.78.0
 	github.com/openai/openai-go/v2 v2.7.1
 	golang.org/x/text v0.28.0
 )

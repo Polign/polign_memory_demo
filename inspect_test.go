@@ -22,6 +22,12 @@ func inspectorFake(t *testing.T) *memkit.Store {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
+		// Recall reads its registry log with a subject filter; none of the
+		// canned records match it.
+		if strings.Contains(r.URL.Query().Get("filter"), "recall:registry") {
+			_, _ = w.Write([]byte(`{"vectors":[],"total":0}`))
+			return
+		}
 		_, _ = w.Write([]byte(vectors))
 	}))
 	t.Cleanup(srv.Close)

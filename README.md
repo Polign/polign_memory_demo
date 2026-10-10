@@ -14,7 +14,7 @@ withdrawals as you talk.
 
 ## Run locally
 
-You'll need Go 1.25+, Polign server v0.6.4+, and an Anthropic or OpenAI API key.
+You'll need Go 1.25+, Polign server v0.8.0+, and an Anthropic or OpenAI API key.
 [Install Polign](https://github.com/Polign/polign#install), then:
 
 ```sh

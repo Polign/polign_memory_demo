@@ -58,7 +58,7 @@ func NewStore(backend recall.Backend, collection string, registry Registry, embe
 func (s *Store) Check(ctx context.Context) error {
 	_, _, err := s.backend.List(ctx, s.collection, nil, 1)
 	if err != nil {
-		return fmt.Errorf("Recall needs a dedicated event collection and a Polign server with complete listings (v0.6.4+): %w", err)
+		return fmt.Errorf("Recall needs a dedicated event collection and a Polign server with complete listings and leases (v0.8.0+): %w", err)
 	}
 	return nil
 }

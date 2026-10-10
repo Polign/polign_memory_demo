@@ -551,7 +551,7 @@ func TestRegistryRejectsBadEntries(t *testing.T) {
 	if _, err := LoadRegistry([]byte(`{"ok_name": {"cardinality": "sometimes"}}`)); err == nil {
 		t.Error("unknown cardinality should be rejected")
 	}
-	if _, err := LoadRegistry([]byte(`{"ok_name": {"cardinality": "single", "value_type": "date"}}`)); err == nil {
+	if _, err := LoadRegistry([]byte(`{"ok_name": {"cardinality": "single", "value_type": "duration"}}`)); err == nil {
 		t.Error("unknown value_type should be rejected")
 	}
 }

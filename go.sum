@@ -1,7 +1,11 @@
 github.com/Polign/recall v0.4.0 h1:HSax2ZObrN3yJ66ZK2z4lkCE6ofUlR/NIT8DFP9ylKc=
 github.com/Polign/recall v0.4.0/go.mod h1:EV46JJzVselZCVBt8J006u5EHc5+ucYdWY0f9oJUwTA=
+github.com/Polign/recall v0.14.0 h1:9+wILoClU+IJWMouFurKrXeU5ifyANN6bszNQofDn4s=
+github.com/Polign/recall v0.14.0/go.mod h1:a0sDh8xsSnNlCM76+CqvWw5IjTZBqZTu2deqpU67GDw=
 github.com/anthropics/anthropic-sdk-go v1.66.0 h1:/CKwgscn0Pe1q4U8aFInSOt/v06JeMc9Aq4vIlctCFw=
 github.com/anthropics/anthropic-sdk-go v1.66.0/go.mod h1:3EfIfmFqxH6rbiLcIP4tPFyXL/IHakx2wDG4OU+TIEI=
+github.com/anthropics/anthropic-sdk-go v1.78.0 h1:8uluL7g84HtSSm347tMGtrUuCEBLmme7vOcFCMn7bnk=
+github.com/anthropics/anthropic-sdk-go v1.78.0/go.mod h1:x+lPk/cCl48uRegeP0hlYYBN1b7bEBTveInIMgLicnY=
 github.com/bahlo/generic-list-go v0.2.0 h1:5sz/EEAK+ls5wF+NeqDpk5+iNdMDXrh3z3nPnH1Wvgk=
 github.com/bahlo/generic-list-go v0.2.0/go.mod h1:2KvAjgMlE5NNynlg/5iLrrCCZ2+5xWbdbCW3pNTGyYg=
 github.com/buger/jsonparser v1.1.2 h1:frqHqw7otoVbk5M8LlE/L7HTnIq2v9RX6EJ48i9AxJk=
