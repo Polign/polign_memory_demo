@@ -42,7 +42,8 @@
   "likes": {
     "cardinality": "multi",
     "value_type": "string",
-    "description": "Something this person likes"
+    "description": "Something this person likes",
+    "excludes": ["dislikes"]
   },
   "dislikes": {
     "cardinality": "multi",
