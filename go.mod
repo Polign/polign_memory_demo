@@ -1,12 +1,12 @@
 module github.com/Polign/polign_memory_demo
 
-go 1.25.0
+go 1.27.0
 
 require (
-	github.com/Polign/recall v0.15.0
+	github.com/Polign/recall v0.20.2
 	github.com/anthropics/anthropic-sdk-go v1.78.0
 	github.com/openai/openai-go/v2 v2.7.1
-	golang.org/x/text v0.28.0
+	golang.org/x/text v0.43.0
 )
 
 require (
@@ -20,5 +20,5 @@ require (
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
 	go.yaml.in/yaml/v4 v4.0.0-rc.2 // indirect
-	golang.org/x/sync v0.16.0 // indirect
+	golang.org/x/sync v0.24.0 // indirect
 )

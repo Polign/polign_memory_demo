@@ -12,11 +12,11 @@ services:
         case "$$(uname -m)" in
           x86_64)
             artifact=polign_db_linux_amd64.tar.gz
-            checksum=ae1999931a08f4fc876984cc00416d71cc45cf5bc653ad7f4656cbbd9af19c15
+            checksum=4871228cf95cb763281157a127f4338e11738e418e90a515e5c9f3ad4b01d675
             ;;
           aarch64|arm64)
             artifact=polign_db_linux_arm64.tar.gz
-            checksum=5d01dcab301c499ec19a2a782f88d1958a3243f538a363e73d7a84c3a382be5e
+            checksum=b7727036b1b3c40886fc47d3dd7aa3e9cb788cdaea4c03c5ba08100c8d27c85f
             ;;
           *)
             echo "Unsupported architecture: $$(uname -m)" >&2
@@ -27,12 +27,12 @@ services:
         mkdir -p /var/lib/polign/bin /var/lib/polign/cache /var/lib/polign/store
         chmod 0770 /var/lib/polign /var/lib/polign/cache /var/lib/polign/store
         wget -q -O /tmp/polign.tar.gz \
-          "https://github.com/Polign/polign/releases/download/v0.6.5/$${artifact}"
+          "https://github.com/Polign/polign/releases/download/v0.14.0/$${artifact}"
         echo "$${checksum}  /tmp/polign.tar.gz" | sha256sum -c -
         tar -xzf /tmp/polign.tar.gz -C /tmp polign-server
         mv /tmp/polign-server /var/lib/polign/bin/polign-server
         chmod 0555 /var/lib/polign/bin/polign-server
-        /var/lib/polign/bin/polign-server -version | grep -Fx 0.6.5
+        /var/lib/polign/bin/polign-server -version | grep -Fx 0.14.0
     volumes:
       - polign-data:/var/lib/polign
     cap_drop:
