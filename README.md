@@ -14,7 +14,7 @@ withdrawals as you talk.
 
 ## Run locally
 
-You'll need Go 1.25+, Polign server v0.8.0+, and an Anthropic or OpenAI API key.
+You'll need Go 1.27+, Polign server v0.14.0+, and an Anthropic or OpenAI API key.
 [Install Polign](https://github.com/Polign/polign#install), then:
 
 ```sh
@@ -45,7 +45,7 @@ to keep memory tool inputs and results out of application logs.
 
 ## What Recall handles
 
-The demo imports **Recall v0.4.0** directly. It provides:
+The demo imports **Recall v0.20.2** directly. It provides:
 
 - Typed facts: strings, numbers, and booleans are validated against the registry.
 - Corrections: a newer assertion replaces a single-valued preference; lists of
@@ -95,7 +95,7 @@ instead of treating superseded or deleted values as current facts. Use the new
 default or choose a fresh collection with `-collection`.
 
 Other agents can use the same memory by connecting to the same Polign endpoint,
-collection, and namespace with Recall v0.4.0, the same registry, and the same
+collection, and namespace with Recall v0.20.2, the same registry, and the same
 embedding method. Set `POLIGN_API_KEY` for a server requiring authentication.
 
 The old GIFs and recordings in this repository show the previous memkit
@@ -143,7 +143,7 @@ install steps.
 ## Deployment and tests
 
 The [dstack deployment](dstack/) runs the agent, an authenticated browser UI,
-and Polign v0.6.5 inside a confidential VM. This change updates the deployment
+and Polign v0.14.0 inside a confidential VM. This change updates the deployment
 configuration; it does not redeploy an existing VM.
 
 ```sh
